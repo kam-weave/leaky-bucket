@@ -1,10 +1,20 @@
 # CRM API Server
 
-A simple CRM-style API server for managing contacts and files.
+A simple CRM-style API server for managing contacts and files. Available in both Go and Java implementations with identical API interfaces.
+
+## Implementations
+
+- **Go**: Located in `go/` directory
+- **Java**: Located in `java/` directory (Spring Boot)
+
+Both implementations share the same SQLite database schema and provide identical REST API endpoints.
 
 ## Quick Start
 
+### Go
+
 ```bash
+cd go
 make seed   # Seed the database with test data
 make run    # Start the server
 ```
@@ -12,8 +22,25 @@ make run    # Start the server
 Or without make:
 
 ```bash
+cd go
 go run ./cmd/server --seed
 go run ./cmd/server
+```
+
+### Java
+
+```bash
+cd java
+make seed   # Seed the database with test data
+make run    # Start the server
+```
+
+Or without make:
+
+```bash
+cd java
+./mvnw spring-boot:run -Dspring-boot.run.arguments="--app.seed=true"
+./mvnw spring-boot:run
 ```
 
 The server runs on `http://localhost:8080` by default.
@@ -111,25 +138,40 @@ curl -H "Authorization: Bearer user@example.com" \
 
 ## Seeding Options
 
+### Go
+
 ```bash
+cd go
 make seed                                      # Default: 10k contacts, 20 files
 go run ./cmd/server --seed --contacts=50000    # Custom contact count
 go run ./cmd/server --seed --files=100         # Custom file count
 ```
 
+### Java
+
+```bash
+cd java
+make seed                                                                              # Default: 10k contacts, 20 files
+./mvnw spring-boot:run -Dspring-boot.run.arguments="--app.seed=true --contacts=50000"  # Custom contact count
+```
+
 To reset the database:
 
 ```bash
-make reset
+cd go && make reset   # Go
+cd java && make reset # Java
 ```
 
-## Benchmarks
+## Benchmarks (Go only)
 
 ```bash
+cd go
 make bench
 ```
 
 ## Configuration
+
+### Go
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -138,3 +180,13 @@ make bench
 | `--seed` | `false` | Seed database with test data |
 | `--contacts` | `10000` | Number of contacts to seed |
 | `--files` | `20` | Number of files to seed |
+
+### Java
+
+Configuration is in `src/main/resources/application.properties`:
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `server.port` | `8080` | Server listen port |
+| `app.data-dir` | `data` | Data directory for database and files |
+| `app.max-upload-size` | `104857600` | Max file upload size (100MB) |
