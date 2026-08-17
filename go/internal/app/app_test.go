@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,5 +115,42 @@ func TestHTTP_UnauthenticatedCounts(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("unauth request 11: want 429 (bucket consumed by anon traffic), got %d", resp.StatusCode)
+	}
+}
+
+// F4 — 429 contract + recovery over HTTP: the rejected response carries an exact
+// Retry-After of "6" (one 6s drip) and a JSON {"error": ...} body, and after the
+// clock advances one interval the limiter admits again.
+func TestHTTP_RetryAfterValueBodyAndRecovery(t *testing.T) {
+	srv, clk := newLimitedServer(t, 10)
+
+	for i := 0; i < 10; i++ {
+		authedGet(t, srv.URL+"/api/contacts").Body.Close()
+	}
+
+	resp := authedGet(t, srv.URL+"/api/contacts")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		resp.Body.Close()
+		t.Fatalf("11th request: want 429, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Retry-After"); got != "6" {
+		resp.Body.Close()
+		t.Fatalf("Retry-After: want \"6\", got %q", got)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decoding 429 body: %v", err)
+	}
+	resp.Body.Close()
+	if body["error"] == "" {
+		t.Fatalf("429 body: want a JSON error field, got %v", body)
+	}
+
+	*clk = clk.Add(6 * time.Second) // one leak interval frees a slot
+	resp2 := authedGet(t, srv.URL+"/api/contacts")
+	defer resp2.Body.Close()
+	if resp2.StatusCode == http.StatusTooManyRequests {
+		t.Fatal("after advancing 6s: want recovery, still got 429")
 	}
 }
