@@ -167,3 +167,19 @@ func TestLeakyBucket_ConcurrentNeverExceedsCapacity(t *testing.T) {
 		t.Fatalf("concurrent admits: want exactly 10 (capacity), got %d", allowed)
 	}
 }
+
+// T11 — sliding window allows N, rejects N+1: within one window the first 10 calls
+// are allowed and the 11th is rejected.
+func TestSlidingWindow_AllowsNRejectsNPlus1(t *testing.T) {
+	now := time.Now()
+	sw := NewSlidingWindowLog(10, time.Minute, fixedClock(&now))
+
+	for i := 1; i <= 10; i++ {
+		if d := sw.Allow(); !d.Allowed {
+			t.Fatalf("request %d: want allowed, got rejected", i)
+		}
+	}
+	if d := sw.Allow(); d.Allowed {
+		t.Fatal("request 11: want rejected, got allowed")
+	}
+}
