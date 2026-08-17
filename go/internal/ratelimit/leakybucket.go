@@ -55,5 +55,12 @@ func (b *LeakyBucket) Allow() Decision {
 		b.level++
 		return Decision{Allowed: true}
 	}
-	return Decision{Allowed: false}
+
+	// Rejected: report how long until enough leaks out to admit one request, i.e.
+	// until the level drops to capacity-1. deficit units at leakPerNano per ns.
+	deficit := b.level - (b.capacity - 1)
+	return Decision{
+		Allowed:    false,
+		RetryAfter: time.Duration(deficit / b.leakPerNano),
+	}
 }

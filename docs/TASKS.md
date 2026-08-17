@@ -185,7 +185,7 @@ followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
   advances on reject; after waiting, exactly the expected number free up.
 - [x] **T5 — full recovery / cap:** after a long idle, `level` floors at 0 (not negative) and the
   next burst of 10 is allowed again; level never exceeds capacity.
-- [ ] **T6 — Retry-After:** on reject, `Decision.RetryAfter` ≈ time until one slot frees (~6s),
+- [x] **T6 — Retry-After:** on reject, `Decision.RetryAfter` ≈ time until one slot frees (~6s),
   and shrinks as the clock advances.
 - [ ] **T7 — thread-safety:** N goroutines issuing M calls never allow more than capacity within
   a frozen-clock window (`-race`); smoke test for the single-critical-section invariant.
@@ -218,3 +218,4 @@ _Appended as we complete each step._
 | T3 | partial leak is proportional | no code change — pins the leak rate/units |
 | T4 | rejections don't consume capacity | no code change — level only rises on accept |
 | T5 | floor at 0 + full recovery after idle | no code change — `level < 0` clamp from T1 |
+| T6 | Retry-After on reject | `leakybucket.go`: reject branch now returns `RetryAfter = deficit/leakPerNano` (time until level drops to capacity-1) |

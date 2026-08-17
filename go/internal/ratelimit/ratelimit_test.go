@@ -110,3 +110,31 @@ func TestLeakyBucket_FloorsAndFullyRecovers(t *testing.T) {
 		t.Fatal("post-idle 11th: want rejected (level must not overshoot below 0)")
 	}
 }
+
+// T6 — Retry-After: on rejection the Decision reports how long until one slot frees
+// (~6s when the bucket just filled), and that estimate shrinks as time passes.
+func TestLeakyBucket_RetryAfter(t *testing.T) {
+	now := time.Now()
+	lb := NewLeakyBucket(10, time.Minute, fixedClock(&now))
+	for i := 0; i < 10; i++ {
+		lb.Allow()
+	}
+
+	d := lb.Allow()
+	if d.Allowed {
+		t.Fatal("bucket should be full")
+	}
+	// One slot = period/capacity = 6s. Allow a small tolerance for float math.
+	if d.RetryAfter < 5*time.Second+900*time.Millisecond || d.RetryAfter > 6*time.Second {
+		t.Fatalf("RetryAfter: want ~6s, got %v", d.RetryAfter)
+	}
+
+	now = now.Add(3 * time.Second) // half-way to a free slot
+	d = lb.Allow()
+	if d.Allowed {
+		t.Fatal("still full at 3s")
+	}
+	if d.RetryAfter < 2*time.Second+900*time.Millisecond || d.RetryAfter > 3*time.Second {
+		t.Fatalf("RetryAfter after 3s: want ~3s, got %v", d.RetryAfter)
+	}
+}
