@@ -69,6 +69,44 @@ curl -H "Authorization: Bearer user@example.com" http://localhost:8080/api/conta
 
 The token should be a valid email address. It serves as the user identifier.
 
+## Rate Limiting (Go)
+
+The Go server enforces a **process-local, global rate limit**: **10 requests per minute across
+all clients combined**, applied to `/api/**`. `/health` is exempt.
+
+- **Algorithm:** a leaky bucket (counter form) — allows a burst of up to 10, then refills one
+  slot every ~6s. This is *smoothing*, not a strict rolling window: the worst case across a
+  poorly-aligned 60s window is ~20. A strict **sliding-window log** (never >10 in any rolling
+  60s) is also included and selectable by config.
+- **Placement:** the limiter is the front door of `/api` — it runs **before** auth, so
+  unauthenticated requests count too (a 429 preempts the 401).
+- **On rejection:** HTTP **429** with a JSON `{"error": ...}` body and a `Retry-After` header.
+  Every `/api` response also carries `RateLimit-Limit` / `RateLimit-Remaining` (and
+  `RateLimit-Reset` on a 429).
+
+Configured in `go/cmd/server/main.go` via the factory:
+
+```go
+ratelimit.New(ratelimit.Config{
+    Algorithm: ratelimit.AlgorithmLeakyBucket, // or AlgorithmSlidingWindowLog
+    Limit:     10,
+    Period:    time.Minute,
+}, time.Now)
+```
+
+Swapping the strategy is a one-line `Algorithm` change — the middleware and wiring depend only
+on the `ratelimit.RateLimiter` interface (Open/Closed). See
+[`docs/rate-limiter-plan.md`](docs/rate-limiter-plan.md) for the full design and
+[`docs/TASKS.md`](docs/TASKS.md) for the test-by-test build log.
+
+```bash
+# Watch the limit trip: the 11th call within a minute returns 429.
+for i in $(seq 1 11); do
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -H "Authorization: Bearer user@example.com" http://localhost:8080/api/contacts
+done
+```
+
 ## Endpoints
 
 ### Health

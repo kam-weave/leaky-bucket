@@ -8,11 +8,16 @@ import (
 
 	"github.com/weave-lab/interview-public/go/internal/api"
 	"github.com/weave-lab/interview-public/go/internal/auth"
+	"github.com/weave-lab/interview-public/go/internal/ratelimit"
 	"github.com/weave-lab/interview-public/go/internal/store"
 )
 
 type Options struct {
 	EnableLogging bool
+	// RateLimiter, when set, guards all /api routes with a global rate limit.
+	// It is applied before auth (so unauthenticated requests still count) and
+	// does not cover /health. Nil disables rate limiting (e.g. in benchmarks).
+	RateLimiter ratelimit.RateLimiter
 }
 
 func NewRouter(s *store.Store, opts Options) http.Handler {
@@ -30,6 +35,11 @@ func NewRouter(s *store.Store, opts Options) http.Handler {
 	})
 
 	r.Route("/api", func(r chi.Router) {
+		// Rate limit before auth: the limiter is the front door of /api, so
+		// unauthenticated requests count and /health (outside /api) is exempt.
+		if opts.RateLimiter != nil {
+			r.Use(ratelimit.Middleware(opts.RateLimiter, nil))
+		}
 		r.Use(auth.RequireAuth)
 
 		r.Post("/auth/token", a.HandleToken)

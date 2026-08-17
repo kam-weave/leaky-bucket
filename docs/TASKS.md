@@ -167,10 +167,114 @@ The red-team caught **real design bugs, not nitpicks** — good story about usin
   sliding-window) → Architecture (interface/placement/concurrency/clock) → Build plan → Appendix.
   Content/decisions preserved; diagram still renders.
 
-## Phase 2 — Implementation (not started)
+## Phase 2 — Implementation (Go first)
 
-**Decisions confirmed:** implement in **both Go and Java**; **`/health` is exempt** (limiter
-applies to `/api/**` only). Next: go red→green, one commit per step, starting with the core
-limiter unit tests against an injected clock.
+Branch `rate-limiter-go`. Sequential red→green: each test below is one failing-test commit
+followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
 
-_To be filled in as we go, one line per commit._
+### Test checklist (itemized before building)
+
+**Strategy 1 — `LeakyBucket` (default), unit tests with an injected clock:**
+- [x] **T1 — allow N, reject N+1:** 10 immediate `Allow()` calls return allowed; the 11th is
+  rejected (boundary `level == capacity`).
+- [x] **T2 — leak frees a slot:** fill to capacity, advance the fake clock past one leak interval
+  (~6s), next `Allow()` is allowed (proves leak-then-check ordering).
+- [x] **T3 — partial leak is proportional:** advance < one interval → still rejected; advance ≥
+  one interval → exactly one slot frees (pins the leak-rate math & units).
+- [x] **T4 — rejects don't consume:** a burst of rejections doesn't push recovery out; `last`
+  advances on reject; after waiting, exactly the expected number free up.
+- [x] **T5 — full recovery / cap:** after a long idle, `level` floors at 0 (not negative) and the
+  next burst of 10 is allowed again; level never exceeds capacity.
+- [x] **T6 — Retry-After:** on reject, `Decision.RetryAfter` ≈ time until one slot frees (~6s),
+  and shrinks as the clock advances.
+- [x] **T7 — thread-safety:** N goroutines issuing M calls never allow more than capacity within
+  a frozen-clock window (`-race`); smoke test for the single-critical-section invariant.
+
+**HTTP integration (dedicated router + injected clock, NOT the shared testServer):**
+- [x] **T8 — 429 after burst:** 11th request to an `/api` route → `429` with `Retry-After`
+  header and the `{"error": ...}` JSON body shape.
+- [x] **T9 — /health exempt:** many `/health` requests never 429.
+- [x] **T10 — unauthenticated still counts:** requests without a token count against the bucket
+  (limiter sits before auth) — 429 before 401 once the bucket is full.
+
+**Strategy 2 — `SlidingWindowLog` (strict ≤10/rolling-60s), same interface:**
+- [x] **T11 — allow 10 / reject 11th** within the window.
+- [x] **T12 — oldest ages out:** advance clock so the oldest timestamp exits the 60s window →
+  one slot frees.
+- [x] **T13 — strict rolling window:** spread 10 across the window, then a burst at the end still
+  can't exceed 10 in any 60s span (the property leaky bucket fails). _(Note: first draft of this
+  test placed all 10 at the same instant so they aged out together — a test bug; fixed by spacing
+  them 1s apart. Implementation was already correct.)_
+- [x] **T14 — Retry-After:** ≈ `60s - (now - oldest)`.
+- [x] **T15 — factory selection:** `algorithm = "sliding_window_log"` config yields a
+  `SlidingWindowLog`; default yields `LeakyBucket` (proves OCP wiring).
+
+### Build log (test → implementation, one row per red→green pair)
+
+_Appended as we complete each step._
+
+| # | Test | Implementation that made it pass |
+|---|------|----------------------------------|
+| T1 | allow 10, reject 11th | `ratelimit.go` (`Clock`, `Decision`, `RateLimiter`) + `leakybucket.go` (`NewLeakyBucket`, mutex-guarded leak→check→increment `Allow()`) |
+| T2 | leak frees one slot per interval | no code change — locks the leak-then-check behavior from T1 |
+| T3 | partial leak is proportional | no code change — pins the leak rate/units |
+| T4 | rejections don't consume capacity | no code change — level only rises on accept |
+| T5 | floor at 0 + full recovery after idle | no code change — `level < 0` clamp from T1 |
+| T6 | Retry-After on reject | `leakybucket.go`: reject branch now returns `RetryAfter = deficit/leakPerNano` (time until level drops to capacity-1) |
+| T7 | concurrent never exceeds capacity (`-race`) | no code change — verified the `sync.Mutex` critical section is clean under the race detector |
+| T8 | HTTP 429 + Retry-After after burst | `middleware.go` (429 + Retry-After header + JSON body); `app.go` (`Options.RateLimiter`, applied first inside `/api` before auth); `main.go` wires the real 10/min limiter; isolated `app_test.go` harness |
+| T9 | /health exempt | no code change — limiter lives inside the `/api` subtree, `/health` is outside it |
+| T10 | unauthenticated requests count | no code change — confirms the before-auth placement (429 preempts 401 once full) |
+| T11 | sliding window allows 10, rejects 11th | `slidingwindow.go` — `NewSlidingWindowLog`, mutex-guarded evict→count→append `Allow()` (same `RateLimiter` interface) |
+| T12 | window expiry frees capacity | no code change — locks the eviction logic from T11 |
+| T13 | strict rolling window (≤10 in any 60s) | no impl change — test corrected to space requests 1s apart; proves the property leaky bucket can't |
+| T14 | sliding window Retry-After | `slidingwindow.go`: reject branch returns `window - (now - oldest)` |
+| T15 | config-driven algorithm selection | `factory.go` (`Config`, `New()` switch, `Algorithm*` constants); `main.go` builds the limiter via the factory |
+
+**Status:** T1–T15 complete. `go vet` clean, `go test -race ./...` green across all packages;
+existing benchmarks unaffected (limiter is nil in the shared test harness). Files added:
+`go/internal/ratelimit/{ratelimit,leakybucket,slidingwindow,middleware,factory}.go` +
+`ratelimit_test.go`; `go/internal/app/app_test.go`; wired via `app.Options.RateLimiter` and
+`main.go`.
+
+### Adversarial code validation (post-implementation)
+
+- [x] Ran 3 adversarial agents (correctness, concurrency, HTTP/API) against the finished Go code.
+  **Verdict from all three: correct for the required 10/min config — no live bugs.** (Correctness
+  agent even verified the leak math lands on exactly 9.0 after 6s; concurrency agent confirmed a
+  single critical section in both limiters, true singleton, no lock held during I/O; HTTP agent
+  confirmed placement/exemption/before-auth/single-instance and that the seed & benchmark paths
+  are unaffected.) Findings were defensive hardening + test-coverage gaps:
+
+| # | Finding | Action |
+|---|---------|--------|
+| F1 | Factory/constructors didn't reject `Limit<=0`/`Period<=0` (Period 0 → +Inf leak silently disables the limiter) | **Fixed** — validate in `New` |
+| F2 | `SlidingWindowLog` lacked the backward-clock clamp `LeakyBucket` has | **Fixed** — clamp Retry-After to `[0, window]` |
+| F3 | Concurrency test froze the clock, so the leak/eviction mutation path never ran under contention; sliding had no concurrency test | **Fixed** — added advancing-atomic-clock concurrent tests (bound assertions) for both |
+| F4 | HTTP tests didn't assert the Retry-After value or the JSON body, and never advanced the clock at the HTTP layer | **Fixed** — added asserts + an HTTP recovery test |
+| F5 | Plan wanted rejections logged; middleware logged nothing | **Fixed** — `slog.Warn` on reject |
+| — | Per-client vs global (spec says global) | not a bug — noted talking point |
+| G1 | DRY: 429 body duplicated the API error envelope | **Fixed** — shared `apierr.Write` |
+| G2 | No `RateLimit-*` headers | **Fixed** — emit Limit/Remaining/Reset |
+| G3 | Pre-existing 401 was plain-text, not JSON | **Fixed** — 401 now uses `apierr.Write` |
+
+**Follow-up fix commits (user asked to also address the deferred items):**
+
+| Fix | Test | Change |
+|-----|------|--------|
+| G1 | existing (F4 body assert) | new `internal/apierr` package; `api.writeError` and rate-limit middleware both delegate to `apierr.Write` |
+| G2 | `TestHTTP_RateLimitHeaders` | `Decision` gains `Limit`/`Remaining` (set by both limiters); middleware emits `RateLimit-Limit`/`-Remaining` on every /api response and `-Reset` on 429 |
+| G3 | `TestHTTP_UnauthorizedIsJSON` | `auth.RequireAuth` now returns the JSON `{"error":...}` envelope via `apierr.Write` (was plain text) |
+
+- [x] Documented the limiter in the README (Rate Limiting section: algorithm, guarantee,
+  placement, 429/headers, config-driven swap) — plan step 8.
+
+**Fix commits (same one-per-item pattern):**
+
+| Fix | Test | Change |
+|-----|------|--------|
+| F1 | `TestFactory_RejectsDegenerateConfig` | `factory.go` validates `Limit>0` && `Period>0` |
+| F2 | `TestSlidingWindow_BackwardClockClampsRetryAfter` | `slidingwindow.go` clamps Retry-After to `[0, window]` |
+| F3 | `TestLeakyBucket_ConcurrentWithAdvancingClock`, `TestSlidingWindow_ConcurrentWithAdvancingClock` | `atomicClock` helper; advance clock per call so leak/eviction runs under contention (bound assertions, `-race`) |
+| F4 | `TestHTTP_RetryAfterValueBodyAndRecovery` | asserts exact `Retry-After: 6`, JSON `{"error":...}` body, and clock-driven recovery (no code change) |
+| F5 | `TestMiddleware_LogsRejectionOnly` | `middleware.go` logs rejections via injected `*slog.Logger` (warn; allowed requests silent); `app.go` passes nil → `slog.Default()` |
