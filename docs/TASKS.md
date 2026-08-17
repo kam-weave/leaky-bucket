@@ -266,6 +266,9 @@ existing benchmarks unaffected (limiter is nil in the shared test harness). File
 | G2 | `TestHTTP_RateLimitHeaders` | `Decision` gains `Limit`/`Remaining` (set by both limiters); middleware emits `RateLimit-Limit`/`-Remaining` on every /api response and `-Reset` on 429 |
 | G3 | `TestHTTP_UnauthorizedIsJSON` | `auth.RequireAuth` now returns the JSON `{"error":...}` envelope via `apierr.Write` (was plain text) |
 
+- [x] Documented the limiter in the README (Rate Limiting section: algorithm, guarantee,
+  placement, 429/headers, config-driven swap) — plan step 8.
+
 **Fix commits (same one-per-item pattern):**
 
 | Fix | Test | Change |
