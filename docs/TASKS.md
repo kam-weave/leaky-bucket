@@ -193,7 +193,7 @@ followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
 **HTTP integration (dedicated router + injected clock, NOT the shared testServer):**
 - [x] **T8 — 429 after burst:** 11th request to an `/api` route → `429` with `Retry-After`
   header and the `{"error": ...}` JSON body shape.
-- [ ] **T9 — /health exempt:** many `/health` requests never 429.
+- [x] **T9 — /health exempt:** many `/health` requests never 429.
 - [ ] **T10 — unauthenticated still counts:** requests without a token count against the bucket
   (limiter sits before auth) — 429 before 401 once the bucket is full.
 
@@ -221,3 +221,4 @@ _Appended as we complete each step._
 | T6 | Retry-After on reject | `leakybucket.go`: reject branch now returns `RetryAfter = deficit/leakPerNano` (time until level drops to capacity-1) |
 | T7 | concurrent never exceeds capacity (`-race`) | no code change — verified the `sync.Mutex` critical section is clean under the race detector |
 | T8 | HTTP 429 + Retry-After after burst | `middleware.go` (429 + Retry-After header + JSON body); `app.go` (`Options.RateLimiter`, applied first inside `/api` before auth); `main.go` wires the real 10/min limiter; isolated `app_test.go` harness |
+| T9 | /health exempt | no code change — limiter lives inside the `/api` subtree, `/health` is outside it |

@@ -72,3 +72,20 @@ func TestHTTP_429AfterBurst(t *testing.T) {
 		t.Fatal("429 response missing Retry-After header")
 	}
 }
+
+// T9 — /health is exempt: it lives outside /api, so far more than `capacity`
+// health checks never trip the limit.
+func TestHTTP_HealthExempt(t *testing.T) {
+	srv, _ := newLimitedServer(t, 10)
+
+	for i := 1; i <= 30; i++ {
+		resp, err := http.Get(srv.URL + "/health")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("/health request %d: want 200, got %d", i, resp.StatusCode)
+		}
+	}
+}
