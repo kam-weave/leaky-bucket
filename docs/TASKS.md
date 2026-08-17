@@ -167,10 +167,50 @@ The red-team caught **real design bugs, not nitpicks** — good story about usin
   sliding-window) → Architecture (interface/placement/concurrency/clock) → Build plan → Appendix.
   Content/decisions preserved; diagram still renders.
 
-## Phase 2 — Implementation (not started)
+## Phase 2 — Implementation (Go first)
 
-**Decisions confirmed:** implement in **both Go and Java**; **`/health` is exempt** (limiter
-applies to `/api/**` only). Next: go red→green, one commit per step, starting with the core
-limiter unit tests against an injected clock.
+Branch `rate-limiter-go`. Sequential red→green: each test below is one failing-test commit
+followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
 
-_To be filled in as we go, one line per commit._
+### Test checklist (itemized before building)
+
+**Strategy 1 — `LeakyBucket` (default), unit tests with an injected clock:**
+- [ ] **T1 — allow N, reject N+1:** 10 immediate `Allow()` calls return allowed; the 11th is
+  rejected (boundary `level == capacity`).
+- [ ] **T2 — leak frees a slot:** fill to capacity, advance the fake clock past one leak interval
+  (~6s), next `Allow()` is allowed (proves leak-then-check ordering).
+- [ ] **T3 — partial leak is proportional:** advance < one interval → still rejected; advance ≥
+  one interval → exactly one slot frees (pins the leak-rate math & units).
+- [ ] **T4 — rejects don't consume:** a burst of rejections doesn't push recovery out; `last`
+  advances on reject; after waiting, exactly the expected number free up.
+- [ ] **T5 — full recovery / cap:** after a long idle, `level` floors at 0 (not negative) and the
+  next burst of 10 is allowed again; level never exceeds capacity.
+- [ ] **T6 — Retry-After:** on reject, `Decision.RetryAfter` ≈ time until one slot frees (~6s),
+  and shrinks as the clock advances.
+- [ ] **T7 — thread-safety:** N goroutines issuing M calls never allow more than capacity within
+  a frozen-clock window (`-race`); smoke test for the single-critical-section invariant.
+
+**HTTP integration (dedicated router + injected clock, NOT the shared testServer):**
+- [ ] **T8 — 429 after burst:** 11th request to an `/api` route → `429` with `Retry-After`
+  header and the `{"error": ...}` JSON body shape.
+- [ ] **T9 — /health exempt:** many `/health` requests never 429.
+- [ ] **T10 — unauthenticated still counts:** requests without a token count against the bucket
+  (limiter sits before auth) — 429 before 401 once the bucket is full.
+
+**Strategy 2 — `SlidingWindowLog` (strict ≤10/rolling-60s), same interface:**
+- [ ] **T11 — allow 10 / reject 11th** within the window.
+- [ ] **T12 — oldest ages out:** advance clock so the oldest timestamp exits the 60s window →
+  one slot frees.
+- [ ] **T13 — strict rolling window:** spread 10 across the window, then a burst at the end still
+  can't exceed 10 in any 60s span (the property leaky bucket fails).
+- [ ] **T14 — Retry-After:** ≈ `60s - (now - oldest)`.
+- [ ] **T15 — factory selection:** `algorithm = "sliding_window_log"` config yields a
+  `SlidingWindowLog`; default yields `LeakyBucket` (proves OCP wiring).
+
+### Build log (test → implementation, one row per red→green pair)
+
+_Appended as we complete each step._
+
+| # | Test | Implementation that made it pass | Commit |
+|---|------|----------------------------------|--------|
+| _pending_ | | | |
