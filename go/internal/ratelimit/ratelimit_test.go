@@ -237,3 +237,31 @@ func TestSlidingWindow_StrictRollingWindow(t *testing.T) {
 		t.Fatal("only one should free: want rejected")
 	}
 }
+
+// T14 — sliding window Retry-After: on rejection, the hint equals the time until
+// the oldest in-window request ages out (~60s when the window just filled, shrinking
+// as time passes).
+func TestSlidingWindow_RetryAfter(t *testing.T) {
+	now := time.Now()
+	sw := NewSlidingWindowLog(10, time.Minute, fixedClock(&now))
+	for i := 0; i < 10; i++ {
+		sw.Allow() // all at t0
+	}
+
+	d := sw.Allow()
+	if d.Allowed {
+		t.Fatal("window should be full")
+	}
+	if d.RetryAfter < 59*time.Second+900*time.Millisecond || d.RetryAfter > time.Minute {
+		t.Fatalf("RetryAfter: want ~60s, got %v", d.RetryAfter)
+	}
+
+	now = now.Add(20 * time.Second) // oldest is now 20s old → ~40s until it ages out
+	d = sw.Allow()
+	if d.Allowed {
+		t.Fatal("still full at 20s")
+	}
+	if d.RetryAfter < 39*time.Second+900*time.Millisecond || d.RetryAfter > 40*time.Second+100*time.Millisecond {
+		t.Fatalf("RetryAfter after 20s: want ~40s, got %v", d.RetryAfter)
+	}
+}

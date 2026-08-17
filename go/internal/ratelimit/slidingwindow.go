@@ -47,5 +47,12 @@ func (s *SlidingWindowLog) Allow() Decision {
 		s.times = append(s.times, now)
 		return Decision{Allowed: true}
 	}
-	return Decision{Allowed: false}
+
+	// Rejected: a slot frees when the oldest in-window request ages out, i.e. after
+	// window - (now - oldest).
+	retryAfter := s.window - now.Sub(s.times[0])
+	if retryAfter < 0 {
+		retryAfter = 0
+	}
+	return Decision{Allowed: false, RetryAfter: retryAfter}
 }

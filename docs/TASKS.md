@@ -205,7 +205,7 @@ followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
   can't exceed 10 in any 60s span (the property leaky bucket fails). _(Note: first draft of this
   test placed all 10 at the same instant so they aged out together — a test bug; fixed by spacing
   them 1s apart. Implementation was already correct.)_
-- [ ] **T14 — Retry-After:** ≈ `60s - (now - oldest)`.
+- [x] **T14 — Retry-After:** ≈ `60s - (now - oldest)`.
 - [ ] **T15 — factory selection:** `algorithm = "sliding_window_log"` config yields a
   `SlidingWindowLog`; default yields `LeakyBucket` (proves OCP wiring).
 
@@ -228,3 +228,4 @@ _Appended as we complete each step._
 | T11 | sliding window allows 10, rejects 11th | `slidingwindow.go` — `NewSlidingWindowLog`, mutex-guarded evict→count→append `Allow()` (same `RateLimiter` interface) |
 | T12 | window expiry frees capacity | no code change — locks the eviction logic from T11 |
 | T13 | strict rolling window (≤10 in any 60s) | no impl change — test corrected to space requests 1s apart; proves the property leaky bucket can't |
+| T14 | sliding window Retry-After | `slidingwindow.go`: reject branch returns `window - (now - oldest)` |
