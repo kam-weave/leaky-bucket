@@ -89,3 +89,30 @@ func TestHTTP_HealthExempt(t *testing.T) {
 		}
 	}
 }
+
+// T10 — unauthenticated requests count: because the limiter runs before auth, ten
+// tokenless /api requests (each 401) still consume the bucket, so the 11th is
+// rejected with 429 before auth even gets a chance to 401 it.
+func TestHTTP_UnauthenticatedCounts(t *testing.T) {
+	srv, _ := newLimitedServer(t, 10)
+
+	for i := 1; i <= 10; i++ {
+		resp, err := http.Get(srv.URL + "/api/contacts") // no Authorization header
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("unauth request %d: want 401, got %d", i, resp.StatusCode)
+		}
+	}
+
+	resp, err := http.Get(srv.URL + "/api/contacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("unauth request 11: want 429 (bucket consumed by anon traffic), got %d", resp.StatusCode)
+	}
+}
