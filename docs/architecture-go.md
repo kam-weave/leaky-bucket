@@ -21,9 +21,9 @@ flowchart LR
     tp --> health{"/health?"}
     health -- yes --> h[["health handler"]]
     health -- no --> api["/api subtree"]
-    api --> ra[RequireAuth<br/>401 if no token]
-    ra --> rl[["RateLimiter (new)<br/>429 if bucket full"]]
-    rl --> hdl[[API handler]]
+    api --> rl[["RateLimiter (new)<br/>429 if bucket full"]]
+    rl --> ra[RequireAuth<br/>401 if no token]
+    ra --> hdl[[API handler]]
     style rl fill:#ffe0b2,stroke:#e65100
 ```
 
@@ -53,13 +53,14 @@ router.
 Our limiter middleware will have the same `func(http.Handler) http.Handler` shape and drop
 straight into a `r.Use(...)` line.
 
-- **Global (covers `/health` too):** add `r.Use(rl.Middleware)` in the top-level chain at
-  `app.go:22-26`. Order matters — placing it *before* line 26 limits before auth parsing.
-- **API-only (excludes `/health`, recommended):** add `r.Use(rl.Middleware)` inside the
-  `r.Route("/api", ...)` closure at `app.go:33`, alongside/after `auth.RequireAuth`.
+**Decision (see `rate-limiter-plan.md` §5):** API-only (so `/health` is exempt), and placed
+**before** `auth.RequireAuth` so the limiter is the front door of `/api` and unauthenticated
+requests count — matching the Java placement. Add `r.Use(rl.Middleware)` as the **first**
+`r.Use(...)` inside the `r.Route("/api", ...)` closure, ahead of `auth.RequireAuth` (`app.go:33`).
 
 Since the assignment wants a **single global bucket**, the middleware closes over **one**
-shared limiter instance created once in `NewRouter` (not per-request).
+shared limiter instance created once in `NewRouter` (not per-request). The entire
+leak→check→increment runs inside one `sync.Mutex` critical section (no lock-free fast path).
 
 ## Auth
 

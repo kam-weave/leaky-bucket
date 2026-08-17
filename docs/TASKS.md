@@ -84,6 +84,80 @@ A running, chronological log of everything we did in this repo, so it can be tal
   re-exported, so app code can't `new` its own). Documented the private-constructor/static
   accessor alternative and why the module-singleton is the cleaner analog to how Go/Java wire
   a single instance at composition time.
+- [x] Extended the **single global instance** invariant to Go and Java in the plan (§3), so all
+  three stacks enforce it explicitly, each idiomatically: Go → construct once at the composition
+  root (`NewRouter`) + constructor injection, unexported fields, `sync.Once` only if a hard
+  global is wanted; Java → rely on Spring's default **singleton-scoped bean** + constructor
+  injection with a package-private constructor. Framed as a deliberate design property to raise
+  in the interview.
+
+### Adversarial plan review (before writing code)
+
+- [x] Spun up **3 parallel adversarial review agents** against the plan + architecture docs,
+  each with a distinct lens, to surface gaps before implementation:
+  1. **Algorithm correctness** — leak math, off-by-one, "10/min" literal vs burst behavior,
+     clock/precision, leaky vs token-bucket fit.
+  2. **Concurrency & single-instance** — lock coverage of read-modify-write, singleton
+     airtightness across Go/Java/TS, event-loop-as-mutex claim, contention.
+  3. **HTTP/API/testability & the plan itself** — 429 body/headers, exemptions, injected-clock
+     specificity, the shared-server test-isolation risk, red→green ordering.
+- [x] Triaged all three reports and folded accepted fixes into the plan (§5 decisions, new §6
+  "Adversarial review — findings & resolutions") and reconciled the architecture docs.
+
+#### Review findings & what we did (interview talking points)
+
+The red-team caught **real design bugs, not nitpicks** — good story about using AI adversarially:
+
+1. **"10 req/min" was overstated.** Leaky-bucket smoothing permits burst 10 + ~10 leaked ≈ **20**
+   in a bad 60s window, not 10. → §2 now states the exact guarantee + a model comparison table
+   (only a sliding-window log gives a strict 10/60s). Flagged as an open decision for the grader.
+2. **Non-atomic read-modify-write risk.** leak→check→increment must be **one** locked critical
+   section or two requests both see `level=9` and both pass. → mandated in §6.2 + both arch docs.
+3. **Two stacks behaved differently around auth.** Go limited *after* `RequireAuth` (anon
+   requests never counted); Java's filter ran *before* auth (anon requests consumed tokens). →
+   unified: limiter is the front door of `/api` in **both**, before auth; anon counts.
+4. **Java raw `Filter` could double-count** on async re-dispatch. → switch to
+   `OncePerRequestFilter` + `FilterRegistrationBean` (dispatch `REQUEST` only).
+5. **Shared Go test harness = flaky limiter tests + throttled benchmarks.** One `testServer`/
+   bucket leaks state across the whole binary. → limiter HTTP tests build their own
+   router+bucket+clock; benchmarks relax the limit via config.
+6. **Clock hazards.** Wall-clock (`Instant`) can jump backward → spurious rejects; Go/Java could
+   disagree. → monotonic where possible, clamp `elapsed ≥ 0`, one fixed clock signature + time
+   unit per stack.
+7. **429 contract under-specified.** → `Retry-After` + stable error body are now required, not
+   optional. Plus: log rejections, don't read `userId`, surface capacity/period as config.
+8. **Red→green steps too coarse.** → split into one-assertion steps, config-shape first.
+
+- [x] Added plan **§7 Interpretation & live-evolution path** to handle the brief's ambiguity
+  ("10/min" + "Leaky Bucket", no further spec) and the expectation that we evolve it live:
+  - **meter (reject) vs shaper (queue):** we build the *meter* — reject with 429, no queue, so
+    request duration is irrelevant and nothing backs up (the shaper is the variant with
+    queue-backup risk; not building it unless asked);
+  - **"naive vs smoothed" is an algorithm switch:** naive 10/min = fixed-window counter (a
+    different algorithm); our leaky bucket already *is* the smoothed form;
+  - **rate-limiting ≠ concurrency-limiting** (semaphore/bulkhead is the tool for slow-request
+    pileups);
+  - a pivot table: keep the limiter behind a one-method `tryAcquire()` seam so fixed-window ↔
+    leaky ↔ token ↔ shaper ↔ per-client are each a contained, one-file swap during the live
+    session.
+- [x] Added plan **§8 Extensibility — the `RateLimiter` interface (Open/Closed)**: the algorithm
+  sits behind a Strategy interface (`Allow()/allow()` returning a `Decision{allowed, retryAfter}`)
+  so the middleware/filter and wiring depend on the interface, never a concrete algorithm.
+  Selection is config-driven at the composition root via a small factory (Go `switch`; Java
+  `@ConfigurationProperties` + factory/`@ConditionalOnProperty`). Adding an algorithm = new
+  type + one factory case, zero edits to existing code (closed to modification, open to
+  extension). Red→green gets an interface-first step 0 and a later "second strategy +
+  factory-selection test" step to prove OCP.
+- [x] **Confirmed the second strategy: `SlidingWindowLog`** (plan §8.1) — the one algorithm that
+  gives the *literal* "≤10 per rolling 60s" (evict timestamps older than the window; accept if
+  fewer than 10 remain; `Retry-After` = when the oldest ages out). Trade-off: exact but O(n)
+  timestamps (trivial at limit 10) and no burst-smoothing. Ships alongside `LeakyBucket` (default)
+  behind the same `RateLimiter` interface + clock harness, so switching strict↔smoothed is a
+  config flip, not a rebuild. Reflected in §2 table, §6.1, §7 pivot table, §8.1, and red→green.
+- [ ] **Open decisions for the user** (plan §6.1): (a) strict vs smoothed is now a **config flip**
+  (`SlidingWindowLog` pre-built) — default is `LeakyBucket`; (b) do unauthenticated `/api`
+  requests count (plan says yes); (c) exemptions beyond `/health`. Leaning: ship both strategies
+  behind the seam, default to leaky bucket, let the interviewer steer the rest live.
 
 ## Phase 2 — Implementation (not started)
 

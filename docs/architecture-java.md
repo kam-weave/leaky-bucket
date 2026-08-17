@@ -24,7 +24,7 @@ flowchart LR
     req([Request]) --> af["AuthFilter @Order(1)<br/>set userId, never rejects"]
     af --> health{"/health?"}
     health -- yes --> ds[DispatcherServlet]
-    health -- no --> rl[["RateLimitFilter @Order(2) (new)<br/>429 if bucket full"]]
+    health -- no --> rl[["RateLimitFilter (new)<br/>OncePerRequest · 429 if full"]]
     rl --> ds
     ds --> ai["AuthInterceptor<br/>401 on /api/** if no userId"]
     ai --> ctl[[Controller]]
@@ -32,7 +32,7 @@ flowchart LR
 ```
 
 Servlet **filters** run before `DispatcherServlet`; the **interceptor** runs inside it. The new
-limiter is a `@Order(2)` filter after `AuthFilter`, skipping non-`/api/` paths so `/health`
+limiter is a `OncePerRequestFilter` after `AuthFilter`, skipping non-`/api/` paths so `/health`
 stays exempt.
 
 Every request passes through, in order:
@@ -58,18 +58,22 @@ before the controller. For `/api/**`, returns `401` if the `userId` attribute is
 The assignment wants a **single global bucket**, so whichever we pick holds **one** shared
 limiter instance (a singleton `@Component`).
 
-- **Recommended — a servlet `Filter`, mirroring `AuthFilter`:** `@Component @Order(2)
-  implements Filter`. Ordered after `AuthFilter` (`@Order(1)`), so it can read the already-set
-  `userId` attribute if ever needed, and short-circuit with `429` before MVC. Auto-registered
-  just by being a `Filter` component — **no change to `WebConfig`**. Cleanest analog to the
-  existing auth design.
-- **Alternative — a `HandlerInterceptor`:** implement `preHandle` returning `false` + `429`,
-  and register it in `WebConfig.addInterceptors` with `.addPathPatterns("/api/**")`. Good if we
-  want path-scoping / to exempt `/health` declaratively.
+**Decision (see `rate-limiter-plan.md` §5):** a filter that extends **`OncePerRequestFilter`**
+(not raw `Filter`) so async re-dispatch can't double-count one request, registered via a
+**`FilterRegistrationBean`** with explicit order and dispatch `REQUEST` only. It **skips any
+path not under `/api/`** so `/health` is exempt, and runs before `AuthInterceptor` so
+unauthenticated `/api` requests count (matches Go). It does **not** read `userId` — the limit is
+global. Short-circuits with `429` + `Retry-After` before MVC.
 
-For a truly global limit including `/health`, the `@Order(2)` Filter is the most direct fit.
-To exempt `/health` (recommended), either the interceptor with `/api/**`, or a path check in
-the filter.
+- *Why not a raw `@Order(2) Filter`:* a plain `Filter` also fires on `ASYNC`/`ERROR` dispatch,
+  so a `Callable`/`DeferredResult` endpoint would consume two tokens; `OncePerRequestFilter`
+  guarantees one execution per client request.
+- *Why not a `HandlerInterceptor`:* it runs inside `DispatcherServlet` (after more of the
+  stack); a filter short-circuits earlier. Either works, but the filter is the cleaner front
+  door. (An interceptor with `.addPathPatterns("/api/**")` is the fallback.)
+
+Thread-safety: one `ReentrantLock`/`synchronized` section covers **all** access to the bucket's
+`level`/`last` (so no `volatile` needed); no I/O inside the lock.
 
 ## Auth
 

@@ -2,3 +2,4 @@ data/
 bin/
 java/target
 build/
+.DS_Store
