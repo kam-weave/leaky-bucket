@@ -266,6 +266,26 @@ func TestSlidingWindow_RetryAfter(t *testing.T) {
 	}
 }
 
+// V2 — sliding window clamps Retry-After under a backward clock: a backward step
+// must never report a wait longer than the window itself (parity with LeakyBucket's
+// backward-clock defense).
+func TestSlidingWindow_BackwardClockClampsRetryAfter(t *testing.T) {
+	now := time.Now()
+	sw := NewSlidingWindowLog(10, time.Minute, fixedClock(&now))
+	for i := 0; i < 10; i++ {
+		sw.Allow() // all at t0
+	}
+
+	now = now.Add(-5 * time.Second) // clock steps backward
+	d := sw.Allow()
+	if d.Allowed {
+		t.Fatal("window still full: want rejected")
+	}
+	if d.RetryAfter > time.Minute {
+		t.Fatalf("RetryAfter must be clamped to the window, got %v", d.RetryAfter)
+	}
+}
+
 // T15 — factory selection: New builds the concrete limiter named in the config,
 // defaults to the leaky bucket, and errors on an unknown algorithm. This is the
 // Open/Closed seam — swapping strategies is a config value, not a code change.

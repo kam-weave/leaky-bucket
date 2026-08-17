@@ -260,3 +260,4 @@ existing benchmarks unaffected (limiter is nil in the shared test harness). File
 | Fix | Test | Change |
 |-----|------|--------|
 | F1 | `TestFactory_RejectsDegenerateConfig` | `factory.go` validates `Limit>0` && `Period>0` |
+| F2 | `TestSlidingWindow_BackwardClockClampsRetryAfter` | `slidingwindow.go` clamps Retry-After to `[0, window]` |

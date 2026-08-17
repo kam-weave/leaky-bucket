@@ -49,10 +49,14 @@ func (s *SlidingWindowLog) Allow() Decision {
 	}
 
 	// Rejected: a slot frees when the oldest in-window request ages out, i.e. after
-	// window - (now - oldest).
+	// window - (now - oldest). Clamp to [0, window] so a backward clock step (now <
+	// oldest) can't report a wait longer than the window itself — parity with the
+	// leaky bucket's backward-clock defense.
 	retryAfter := s.window - now.Sub(s.times[0])
 	if retryAfter < 0 {
 		retryAfter = 0
+	} else if retryAfter > s.window {
+		retryAfter = s.window
 	}
 	return Decision{Allowed: false, RetryAfter: retryAfter}
 }
