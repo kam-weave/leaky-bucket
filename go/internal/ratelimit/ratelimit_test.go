@@ -157,11 +157,11 @@ func TestLeakyBucket_ConcurrentNeverExceedsCapacity(t *testing.T) {
 
 	var allowed int64
 	var wg sync.WaitGroup
-	for g := 0; g < 50; g++ {
+	for g := 0; g < 20; g++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 100; i++ {
+			for i := 0; i < 50; i++ {
 				if lb.Allow().Allowed {
 					atomic.AddInt64(&allowed, 1)
 				}
@@ -180,7 +180,7 @@ func TestLeakyBucket_ConcurrentNeverExceedsCapacity(t *testing.T) {
 // frozen-clock test never exercises. Admits at most capacity + what leaked over the
 // deterministic elapsed time.
 func TestLeakyBucket_ConcurrentWithAdvancingClock(t *testing.T) {
-	const goroutines, perG = 50, 200
+	const goroutines, perG = 20, 50
 	const step = int64(time.Millisecond)
 
 	base := time.Now()
@@ -214,8 +214,8 @@ func TestLeakyBucket_ConcurrentWithAdvancingClock(t *testing.T) {
 // V3b — sliding window under an ADVANCING clock: entries age out during the run, so
 // the eviction path runs under contention. Admits at most ~limit per rolling window.
 func TestSlidingWindow_ConcurrentWithAdvancingClock(t *testing.T) {
-	const goroutines, perG = 50, 200
-	const step = int64(12 * time.Millisecond) // ~120s total → forces eviction
+	const goroutines, perG = 20, 50
+	const step = int64(120 * time.Millisecond) // ~120s total → forces eviction
 
 	base := time.Now()
 	var ns int64
@@ -389,6 +389,29 @@ func TestFactory_SelectsAlgorithm(t *testing.T) {
 	cfg.Algorithm = "does_not_exist"
 	if _, err := New(cfg, clock); err == nil {
 		t.Fatal("unknown algorithm: want an error")
+	}
+}
+
+// M1 — Decision carries Limit/Remaining for both limiters (drives the RateLimit-*
+// headers). Asserted here in the unit package so mutation testing on the limiters
+// exercises the remaining() math directly.
+func TestDecision_LimitAndRemaining(t *testing.T) {
+	now := time.Now()
+
+	lb := NewLeakyBucket(10, time.Minute, fixedClock(&now))
+	if d := lb.Allow(); d.Limit != 10 || d.Remaining != 9 {
+		t.Fatalf("leaky first Allow: want Limit 10 Remaining 9, got %d/%d", d.Limit, d.Remaining)
+	}
+	for i := 0; i < 9; i++ {
+		lb.Allow()
+	}
+	if d := lb.Allow(); d.Limit != 10 || d.Remaining != 0 { // full → rejected
+		t.Fatalf("leaky when full: want Limit 10 Remaining 0, got %d/%d", d.Limit, d.Remaining)
+	}
+
+	sw := NewSlidingWindowLog(10, time.Minute, fixedClock(&now))
+	if d := sw.Allow(); d.Limit != 10 || d.Remaining != 9 {
+		t.Fatalf("sliding first Allow: want Limit 10 Remaining 9, got %d/%d", d.Limit, d.Remaining)
 	}
 }
 

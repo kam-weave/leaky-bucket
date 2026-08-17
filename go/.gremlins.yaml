@@ -1,0 +1,17 @@
+# Gremlins mutation-testing config (https://gremlins.dev).
+# Run with: make test-mutation
+#
+# Mutation testing changes the source (e.g. flips `<=` to `<`, `+` to `-`, removes
+# a statement) and re-runs the tests. A mutant that makes a test fail is "killed";
+# one that survives means no test noticed the change — a gap in test strength.
+unleash:
+  # Only mutate the rate limiter's own logic; the rest of the CRM app is out of scope.
+  tags: ""
+  dry-run: false
+  # Per-mutant test timeout = baseline test time x this coefficient. Set high so a
+  # cached-fast baseline doesn't cause spurious timeouts when a mutant forces a
+  # recompile. Genuine infinite-loop mutants still time out (and count as killed).
+  timeout-coefficient: 10
+  # Fail CI if effectiveness drops below these thresholds.
+  threshold-efficacy: 80
+  threshold-mcover: 75

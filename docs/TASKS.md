@@ -278,3 +278,34 @@ existing benchmarks unaffected (limiter is nil in the shared test harness). File
 | F3 | `TestLeakyBucket_ConcurrentWithAdvancingClock`, `TestSlidingWindow_ConcurrentWithAdvancingClock` | `atomicClock` helper; advance clock per call so leak/eviction runs under contention (bound assertions, `-race`) |
 | F4 | `TestHTTP_RetryAfterValueBodyAndRecovery` | asserts exact `Retry-After: 6`, JSON `{"error":...}` body, and clock-driven recovery (no code change) |
 | F5 | `TestMiddleware_LogsRejectionOnly` | `middleware.go` logs rejections via injected `*slog.Logger` (warn; allowed requests silent); `app.go` passes nil → `slog.Default()` |
+
+### Test suites (post-implementation hardening)
+
+Adding the layers of the test pyramid beyond the unit + HTTP tests already written. Rationale for
+each level is in `docs/testing.md`.
+
+- [x] **Integration suite** (`go/internal/app/integration_test.go`) — the limiter wired into the
+  real router + store + auth, over in-process HTTP. Tests: one global bucket shared across
+  *different* endpoints (`TestIntegration_OneBucketAcrossEndpoints`); `RateLimit-*` headers on
+  successful 200s (`TestIntegration_HeadersOnSuccessfulResponses`); the sliding-window strategy
+  enforcing a strict rolling cap end-to-end through the router
+  (`TestIntegration_SlidingWindowStrictThroughRouter`). Documented the unit/integration/e2e/mutation
+  rationale in `docs/testing.md`.
+- [x] **E2E suite** (`go/e2e/`, build tag `e2e`) — builds the real server binary, seeds a temp
+  SQLite DB, runs it as an OS process, and hits it over a real socket. `TestE2E_RateLimitReturns429`
+  asserts the 11th burst request → 429 with `Retry-After`. This is the only test covering `main.go`
+  wiring, the real clock, and a genuine network round-trip. `make test-e2e` runs it; the normal
+  `go test ./...` skips it (tag). Rationale in `docs/testing.md`.
+- [x] **Mutation testing** (`make test-mutation`, via [gremlins](https://gremlins.dev), scoped to
+  `internal/ratelimit`). **Why (interview talking point):** coverage shows what code *ran*, not
+  whether tests would *catch a bug*. Mutation testing flips operators / removes statements and
+  checks the tests fail — measuring test *strength*. It paid off immediately: the first run scored
+  **72.5%** and the survivors were real gaps (the limiters' own tests never asserted
+  `Decision.Remaining`; nothing exercised the middleware's Retry-After "floor to ≥1s"). We added
+  `TestDecision_LimitAndRemaining` and `TestMiddleware_RetryAfterFlooredToOne` (M1/M2), raising
+  efficacy to **~85%**; the rest are equivalent/boundary mutants. Rationale + numbers in
+  `docs/testing.md`, linked from the README review guide.
+
+**Status:** four test levels in place — unit, integration, e2e (tag `e2e`), mutation. `make test`
+(fast: unit + integration), `make test-e2e`, `make test-mutation`. `go vet` + `go test -race ./...`
+clean.
