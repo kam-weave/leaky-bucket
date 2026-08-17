@@ -50,3 +50,22 @@ func TestLeakyBucket_LeakFreesASlot(t *testing.T) {
 		t.Fatal("only one slot should free per interval; want rejected")
 	}
 }
+
+// T3 — partial leak is proportional: less than one interval frees nothing;
+// reaching one full interval frees exactly one slot. Pins the leak rate & units.
+func TestLeakyBucket_PartialLeakIsProportional(t *testing.T) {
+	now := time.Now()
+	lb := NewLeakyBucket(10, time.Minute, fixedClock(&now))
+	for i := 0; i < 10; i++ {
+		lb.Allow()
+	}
+
+	now = now.Add(5 * time.Second) // < 6s interval → no slot yet
+	if d := lb.Allow(); d.Allowed {
+		t.Fatal("5s < one interval: want rejected, got allowed")
+	}
+	now = now.Add(1 * time.Second) // now a full 6s has elapsed → one slot
+	if d := lb.Allow(); !d.Allowed {
+		t.Fatal("6s total: want allowed, got rejected")
+	}
+}
