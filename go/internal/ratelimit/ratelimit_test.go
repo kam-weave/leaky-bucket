@@ -203,3 +203,37 @@ func TestSlidingWindow_OldestAgesOut(t *testing.T) {
 		}
 	}
 }
+
+// T13 — strict rolling window: never more than `limit` in ANY 60s span. Ten
+// requests are spaced one second apart; a request just before the earliest closes
+// out is still rejected, and only once that earliest ages out does exactly one slot
+// free. This is the guarantee a leaky bucket cannot make (it allows a boundary
+// burst of ~20).
+func TestSlidingWindow_StrictRollingWindow(t *testing.T) {
+	start := time.Now()
+	now := start
+	sw := NewSlidingWindowLog(10, time.Minute, fixedClock(&now))
+
+	// 10 requests at start, start+1s, ... start+9s — all within the window.
+	for i := 0; i < 10; i++ {
+		now = start.Add(time.Duration(i) * time.Second)
+		if d := sw.Allow(); !d.Allowed {
+			t.Fatalf("spaced request %d: want allowed, got rejected", i+1)
+		}
+	}
+
+	// At start+59s the earliest (start) is still inside the 60s window → 10 held.
+	now = start.Add(59 * time.Second)
+	if d := sw.Allow(); d.Allowed {
+		t.Fatal("at 59s the window still holds 10: want rejected")
+	}
+
+	// At start+60.001s only the earliest ages out → exactly one slot frees.
+	now = start.Add(60*time.Second + time.Millisecond)
+	if d := sw.Allow(); !d.Allowed {
+		t.Fatal("after the earliest ages out: want exactly one slot free (allowed)")
+	}
+	if d := sw.Allow(); d.Allowed {
+		t.Fatal("only one should free: want rejected")
+	}
+}
