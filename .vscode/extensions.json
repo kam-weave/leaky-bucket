@@ -1,0 +1,6 @@
+{
+  "// note": "VS Code prompts to install these on repo open. Renders the inline Mermaid diagrams in docs/ via Cmd+Shift+V. Or run `make setup` from the repo root.",
+  "recommendations": [
+    "bierner.markdown-mermaid"
+  ]
+}

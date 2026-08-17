@@ -9,6 +9,20 @@ A simple CRM-style API server for managing contacts and files. Available in both
 
 Both implementations share the same SQLite database schema and provide identical REST API endpoints.
 
+## Design docs & AI onboarding
+
+Ramping up (human or AI)? Start with [`CLAUDE.md`](CLAUDE.md), then the [`docs/`](docs/)
+folder: [`architecture-go.md`](docs/architecture-go.md),
+[`architecture-java.md`](docs/architecture-java.md),
+[`rate-limiter-plan.md`](docs/rate-limiter-plan.md), and the task log
+[`TASKS.md`](docs/TASKS.md). Diagrams are inline Mermaid — they render directly on GitHub.
+
+To view the diagrams locally, run **`make diagrams`** — renders them to SVG and opens a browser
+gallery (needs Node/`npx`; no VS Code required). This is the reliable local path.
+
+Optional inline VS Code preview: `make setup` installs the `bierner.markdown-mermaid` extension
+(`Cmd+Shift+V`). Note it can render blank under some dark themes — if so, use `make diagrams`.
+
 ## Quick Start
 
 ### Go
