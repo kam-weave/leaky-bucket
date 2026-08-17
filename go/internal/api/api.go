@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/weave-lab/interview-public/go/internal/apierr"
 	"github.com/weave-lab/interview-public/go/internal/store"
 )
 
@@ -22,5 +23,5 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	apierr.Write(w, status, msg)
 }

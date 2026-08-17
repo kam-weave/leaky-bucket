@@ -253,7 +253,16 @@ existing benchmarks unaffected (limiter is nil in the shared test harness). File
 | F3 | Concurrency test froze the clock, so the leak/eviction mutation path never ran under contention; sliding had no concurrency test | **Fixed** — added advancing-atomic-clock concurrent tests (bound assertions) for both |
 | F4 | HTTP tests didn't assert the Retry-After value or the JSON body, and never advanced the clock at the HTTP layer | **Fixed** — added asserts + an HTTP recovery test |
 | F5 | Plan wanted rejections logged; middleware logged nothing | **Fixed** — `slog.Warn` on reject |
-| — | Deferred (noted, not fixed): export a shared error-writer (minor DRY); `RateLimit-*` headers (not required); pre-existing 401 plain-text vs JSON inconsistency (not ours); per-client vs global (spec says global) | talking points |
+| — | Per-client vs global (spec says global) | not a bug — noted talking point |
+| G1 | DRY: 429 body duplicated the API error envelope | **Fixed** — shared `apierr.Write` |
+| G2 | No `RateLimit-*` headers | **Fixed** — emit Limit/Remaining/Reset |
+| G3 | Pre-existing 401 was plain-text, not JSON | **Fixed** — 401 now uses `apierr.Write` |
+
+**Follow-up fix commits (user asked to also address the deferred items):**
+
+| Fix | Test | Change |
+|-----|------|--------|
+| G1 | existing (F4 body assert) | new `internal/apierr` package; `api.writeError` and rate-limit middleware both delegate to `apierr.Write` |
 
 **Fix commits (same one-per-item pattern):**
 

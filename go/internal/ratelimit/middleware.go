@@ -1,11 +1,12 @@
 package ratelimit
 
 import (
-	"encoding/json"
 	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
+
+	"github.com/weave-lab/interview-public/go/internal/apierr"
 )
 
 // Middleware returns net/http middleware that admits requests through rl and
@@ -33,9 +34,7 @@ func Middleware(rl RateLimiter, logger *slog.Logger) func(http.Handler) http.Han
 			logger.Warn("rate limit exceeded",
 				"method", r.Method, "path", r.URL.Path, "retry_after_s", secs)
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
+			apierr.Write(w, http.StatusTooManyRequests, "rate limit exceeded")
 		})
 	}
 }
