@@ -1,5 +1,5 @@
 .PHONY: setup diagrams
-.PHONY: build-go run-go seed-go reset-go bench-go test-go clean-go
+.PHONY: build-go run-go seed-go reset-go bench-go test-go test-go-all clean-go
 .PHONY: build-java run-java seed-java reset-java test-java clean-java
 .PHONY: clean
 
@@ -34,6 +34,10 @@ bench-go:
 
 test-go:
 	$(MAKE) -C go test
+
+# Every Go test level: unit + integration (race), e2e, and mutation.
+test-go-all:
+	$(MAKE) -C go test-all
 
 clean-go:
 	$(MAKE) -C go clean

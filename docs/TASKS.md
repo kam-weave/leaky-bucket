@@ -309,3 +309,7 @@ each level is in `docs/testing.md`.
 **Status:** four test levels in place — unit, integration, e2e (tag `e2e`), mutation. `make test`
 (fast: unit + integration), `make test-e2e`, `make test-mutation`. `go vet` + `go test -race ./...`
 clean.
+- [x] **One-command test run + tracked tooling:** `make test-go-all` runs every level (unit +
+  integration with `-race`, then e2e, then mutation). Added gremlins as a **`go tool` dependency**
+  in `go.mod`, so `go tool gremlins` builds it on demand — a fresh clone can run mutation testing
+  with no separate install.

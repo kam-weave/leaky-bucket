@@ -1,4 +1,4 @@
-.PHONY: build run seed reset bench test test-e2e test-mutation clean
+.PHONY: build run seed reset bench test test-e2e test-mutation test-all clean
 
 build:
 	go build -o bin/server ./cmd/server
@@ -26,16 +26,19 @@ test-e2e:
 	go test -tags e2e -count=1 ./e2e/...
 
 # Mutation testing: mutate the limiter's source and confirm the tests catch it.
-# Needs gremlins: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+# gremlins is tracked as a go tool dependency (see `tool` in go.mod), so `go tool`
+# builds it on demand — no separate install needed.
 # GOFLAGS=-count=1 disables the go test result cache so gremlins measures a real
 # baseline time — otherwise a cached (near-zero) baseline yields spurious timeouts.
 test-mutation:
-	@GREMLINS=$$(command -v gremlins || echo "$$(go env GOPATH)/bin/gremlins"); \
-	 if [ ! -x "$$GREMLINS" ]; then \
-	   echo "gremlins not found. Install: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest"; \
-	   exit 1; \
-	 fi; \
-	 GOFLAGS=-count=1 "$$GREMLINS" unleash ./internal/ratelimit/
+	GOFLAGS=-count=1 go tool gremlins unleash ./internal/ratelimit/
+
+# Run every Go test level: unit + integration (with the race detector), e2e, and
+# mutation. Slower than `make test`; use it before a release or a review.
+test-all:
+	go test -race ./...
+	$(MAKE) test-e2e
+	$(MAKE) test-mutation
 
 clean:
 	rm -rf bin data
