@@ -69,3 +69,24 @@ func TestLeakyBucket_PartialLeakIsProportional(t *testing.T) {
 		t.Fatal("6s total: want allowed, got rejected")
 	}
 }
+
+// T4 — rejections don't consume capacity: a flood of rejected calls must not push
+// recovery further out. After filling, hammering the full bucket then waiting one
+// interval still frees exactly one slot.
+func TestLeakyBucket_RejectionsDoNotConsume(t *testing.T) {
+	now := time.Now()
+	lb := NewLeakyBucket(10, time.Minute, fixedClock(&now))
+	for i := 0; i < 10; i++ {
+		lb.Allow()
+	}
+	for i := 0; i < 50; i++ {
+		if d := lb.Allow(); d.Allowed {
+			t.Fatal("rejected calls should stay rejected")
+		}
+	}
+
+	now = now.Add(6 * time.Second)
+	if d := lb.Allow(); !d.Allowed {
+		t.Fatal("one interval after a reject flood: want allowed (rejects didn't consume)")
+	}
+}
