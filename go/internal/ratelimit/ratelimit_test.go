@@ -26,3 +26,27 @@ func TestLeakyBucket_AllowsNRejectsNPlus1(t *testing.T) {
 		t.Fatal("request 11: want rejected, got allowed")
 	}
 }
+
+// T2 — leak frees a slot: after filling the bucket, advancing the clock by one
+// leak interval (period/capacity = 6s) drains exactly one slot, so the next call
+// is allowed. Proves leak-then-check ordering.
+func TestLeakyBucket_LeakFreesASlot(t *testing.T) {
+	now := time.Now()
+	lb := NewLeakyBucket(10, time.Minute, fixedClock(&now))
+
+	for i := 0; i < 10; i++ {
+		lb.Allow()
+	}
+	if d := lb.Allow(); d.Allowed {
+		t.Fatal("bucket should be full")
+	}
+
+	now = now.Add(6 * time.Second) // one leak interval
+	if d := lb.Allow(); !d.Allowed {
+		t.Fatal("after one leak interval: want allowed, got rejected")
+	}
+	// Only one slot should have freed: the following call is rejected again.
+	if d := lb.Allow(); d.Allowed {
+		t.Fatal("only one slot should free per interval; want rejected")
+	}
+}

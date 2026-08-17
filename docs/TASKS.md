@@ -177,7 +177,7 @@ followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
 **Strategy 1 — `LeakyBucket` (default), unit tests with an injected clock:**
 - [x] **T1 — allow N, reject N+1:** 10 immediate `Allow()` calls return allowed; the 11th is
   rejected (boundary `level == capacity`).
-- [ ] **T2 — leak frees a slot:** fill to capacity, advance the fake clock past one leak interval
+- [x] **T2 — leak frees a slot:** fill to capacity, advance the fake clock past one leak interval
   (~6s), next `Allow()` is allowed (proves leak-then-check ordering).
 - [ ] **T3 — partial leak is proportional:** advance < one interval → still rejected; advance ≥
   one interval → exactly one slot frees (pins the leak-rate math & units).
@@ -214,3 +214,4 @@ _Appended as we complete each step._
 | # | Test | Implementation that made it pass |
 |---|------|----------------------------------|
 | T1 | allow 10, reject 11th | `ratelimit.go` (`Clock`, `Decision`, `RateLimiter`) + `leakybucket.go` (`NewLeakyBucket`, mutex-guarded leak→check→increment `Allow()`) |
+| T2 | leak frees one slot per interval | no code change — locks the leak-then-check behavior from T1 |
