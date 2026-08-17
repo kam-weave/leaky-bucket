@@ -278,3 +278,16 @@ existing benchmarks unaffected (limiter is nil in the shared test harness). File
 | F3 | `TestLeakyBucket_ConcurrentWithAdvancingClock`, `TestSlidingWindow_ConcurrentWithAdvancingClock` | `atomicClock` helper; advance clock per call so leak/eviction runs under contention (bound assertions, `-race`) |
 | F4 | `TestHTTP_RetryAfterValueBodyAndRecovery` | asserts exact `Retry-After: 6`, JSON `{"error":...}` body, and clock-driven recovery (no code change) |
 | F5 | `TestMiddleware_LogsRejectionOnly` | `middleware.go` logs rejections via injected `*slog.Logger` (warn; allowed requests silent); `app.go` passes nil → `slog.Default()` |
+
+### Test suites (post-implementation hardening)
+
+Adding the layers of the test pyramid beyond the unit + HTTP tests already written. Rationale for
+each level is in `docs/testing.md`.
+
+- [x] **Integration suite** (`go/internal/app/integration_test.go`) — the limiter wired into the
+  real router + store + auth, over in-process HTTP. Tests: one global bucket shared across
+  *different* endpoints (`TestIntegration_OneBucketAcrossEndpoints`); `RateLimit-*` headers on
+  successful 200s (`TestIntegration_HeadersOnSuccessfulResponses`); the sliding-window strategy
+  enforcing a strict rolling cap end-to-end through the router
+  (`TestIntegration_SlidingWindowStrictThroughRouter`). Documented the unit/integration/e2e/mutation
+  rationale in `docs/testing.md`.
