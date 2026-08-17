@@ -70,6 +70,21 @@ A running, chronological log of everything we did in this repo, so it can be tal
   unit-testing the limiter core with an **injected clock** (no real sleeps) and keep the HTTP
   test to a single "429 after the limit" assertion.
 
+- [x] Added **TypeScript equivalents** throughout `docs/rate-limiter-plan.md` (reasoning aid for
+  a TS-native reader — TS is *not* a build target; scope stays Go + Java):
+  - a `LeakyBucket` reference class with an injected `Clock` (`() => number`);
+  - the key concurrency contrast — Go/Java need a mutex/lock across request threads, Node's
+    single-threaded event loop does not, *as long as `tryAcquire()` stays synchronous*;
+  - an Express/Connect `rateLimit` middleware scoped to `/api` (Fastify `preHandler` noted),
+    mirroring the Go/Java `/health`-exempt placement;
+  - test notes mapping the injected clock across Go / Java / TS (incl. Jest fake timers).
+- [x] Hardened the TS design for the **global-singleton** invariant: split *mechanism*
+  (freely-constructable `LeakyBucket`, for tests only) from the *app-wide singleton*
+  (`rate-limiter.ts` constructs the one bucket and exports only the middleware; the class isn't
+  re-exported, so app code can't `new` its own). Documented the private-constructor/static
+  accessor alternative and why the module-singleton is the cleaner analog to how Go/Java wire
+  a single instance at composition time.
+
 ## Phase 2 — Implementation (not started)
 
 **Decisions confirmed:** implement in **both Go and Java**; **`/health` is exempt** (limiter
