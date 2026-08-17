@@ -230,3 +230,33 @@ _Appended as we complete each step._
 | T13 | strict rolling window (≤10 in any 60s) | no impl change — test corrected to space requests 1s apart; proves the property leaky bucket can't |
 | T14 | sliding window Retry-After | `slidingwindow.go`: reject branch returns `window - (now - oldest)` |
 | T15 | config-driven algorithm selection | `factory.go` (`Config`, `New()` switch, `Algorithm*` constants); `main.go` builds the limiter via the factory |
+
+**Status:** T1–T15 complete. `go vet` clean, `go test -race ./...` green across all packages;
+existing benchmarks unaffected (limiter is nil in the shared test harness). Files added:
+`go/internal/ratelimit/{ratelimit,leakybucket,slidingwindow,middleware,factory}.go` +
+`ratelimit_test.go`; `go/internal/app/app_test.go`; wired via `app.Options.RateLimiter` and
+`main.go`.
+
+### Adversarial code validation (post-implementation)
+
+- [x] Ran 3 adversarial agents (correctness, concurrency, HTTP/API) against the finished Go code.
+  **Verdict from all three: correct for the required 10/min config — no live bugs.** (Correctness
+  agent even verified the leak math lands on exactly 9.0 after 6s; concurrency agent confirmed a
+  single critical section in both limiters, true singleton, no lock held during I/O; HTTP agent
+  confirmed placement/exemption/before-auth/single-instance and that the seed & benchmark paths
+  are unaffected.) Findings were defensive hardening + test-coverage gaps:
+
+| # | Finding | Action |
+|---|---------|--------|
+| F1 | Factory/constructors didn't reject `Limit<=0`/`Period<=0` (Period 0 → +Inf leak silently disables the limiter) | **Fixed** — validate in `New` |
+| F2 | `SlidingWindowLog` lacked the backward-clock clamp `LeakyBucket` has | **Fixed** — clamp Retry-After to `[0, window]` |
+| F3 | Concurrency test froze the clock, so the leak/eviction mutation path never ran under contention; sliding had no concurrency test | **Fixed** — added advancing-atomic-clock concurrent tests (bound assertions) for both |
+| F4 | HTTP tests didn't assert the Retry-After value or the JSON body, and never advanced the clock at the HTTP layer | **Fixed** — added asserts + an HTTP recovery test |
+| F5 | Plan wanted rejections logged; middleware logged nothing | **Fixed** — `slog.Warn` on reject |
+| — | Deferred (noted, not fixed): export a shared error-writer (minor DRY); `RateLimit-*` headers (not required); pre-existing 401 plain-text vs JSON inconsistency (not ours); per-client vs global (spec says global) | talking points |
+
+**Fix commits (same one-per-item pattern):**
+
+| Fix | Test | Change |
+|-----|------|--------|
+| F1 | `TestFactory_RejectsDegenerateConfig` | `factory.go` validates `Limit>0` && `Period>0` |

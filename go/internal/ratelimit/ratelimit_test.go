@@ -295,3 +295,20 @@ func TestFactory_SelectsAlgorithm(t *testing.T) {
 		t.Fatal("unknown algorithm: want an error")
 	}
 }
+
+// V1 — factory rejects degenerate configs: a non-positive Limit or Period would
+// otherwise silently disable the limiter (Period 0 → +Inf leak rate).
+func TestFactory_RejectsDegenerateConfig(t *testing.T) {
+	now := time.Now()
+	clock := fixedClock(&now)
+
+	if _, err := New(Config{Limit: 0, Period: time.Minute}, clock); err == nil {
+		t.Fatal("Limit 0: want an error")
+	}
+	if _, err := New(Config{Limit: 10, Period: 0}, clock); err == nil {
+		t.Fatal("Period 0: want an error")
+	}
+	if _, err := New(Config{Limit: -1, Period: time.Minute}, clock); err == nil {
+		t.Fatal("negative Limit: want an error")
+	}
+}

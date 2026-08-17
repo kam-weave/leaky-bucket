@@ -24,6 +24,13 @@ type Config struct {
 // new algorithm is added with one case here and needs no change to the HTTP layer
 // (Open/Closed).
 func New(cfg Config, clock Clock) (RateLimiter, error) {
+	if cfg.Limit <= 0 {
+		return nil, fmt.Errorf("ratelimit: Limit must be > 0, got %d", cfg.Limit)
+	}
+	if cfg.Period <= 0 {
+		return nil, fmt.Errorf("ratelimit: Period must be > 0, got %v", cfg.Period)
+	}
+
 	switch cfg.Algorithm {
 	case AlgorithmLeakyBucket, "":
 		return NewLeakyBucket(cfg.Limit, cfg.Period, clock), nil
