@@ -9,19 +9,50 @@ A simple CRM-style API server for managing contacts and files. Available in both
 
 Both implementations share the same SQLite database schema and provide identical REST API endpoints.
 
-## Design docs & AI onboarding
+## How to review this repo
 
-Ramping up (human or AI)? Start with [`CLAUDE.md`](CLAUDE.md), then the [`docs/`](docs/)
-folder: [`architecture-go.md`](docs/architecture-go.md),
-[`architecture-java.md`](docs/architecture-java.md),
-[`rate-limiter-plan.md`](docs/rate-limiter-plan.md), and the task log
-[`TASKS.md`](docs/TASKS.md). Diagrams are inline Mermaid — they render directly on GitHub.
+The **rate limiter** is the feature to review. It was built AI-assisted but with a deliberate,
+auditable process — **design first, then test-first (red→green), one small commit per step** —
+so there's more written material than a typical change. That's intentional: the docs are the
+reasoning, and the git history is the receipt. You don't need to read everything; here's the
+short path.
 
-To view the diagrams locally, run **`make diagrams`** — renders them to SVG and opens a browser
-gallery (needs Node/`npx`; no VS Code required). This is the reliable local path.
+**Recommended reading order (≈15 min):**
 
-Optional inline VS Code preview: `make setup` installs the `bierner.markdown-mermaid` extension
-(`Cmd+Shift+V`). Note it can render blank under some dark themes — if so, use `make diagrams`.
+1. **[`docs/rate-limiter-plan.md`](docs/rate-limiter-plan.md)** — the design. What we built and
+   *why*: the leaky-bucket algorithm, the exact "10/min" guarantee (and its honest caveats), the
+   `RateLimiter` interface, and where it plugs into the request pipeline. Start here.
+2. **[`docs/architecture-go.md`](docs/architecture-go.md)** — how the existing Go server is wired
+   and the one seam the limiter hooks into. (Diagrams render inline on GitHub.)
+3. **The code** — small and self-contained under
+   [`go/internal/ratelimit/`](go/internal/ratelimit/): `ratelimit.go` (the interface),
+   `leakybucket.go`, `slidingwindow.go`, `middleware.go`, `factory.go`, and the tests in
+   `ratelimit_test.go`; plus the wiring in `go/internal/app/app.go` and the HTTP tests in
+   `go/internal/app/app_test.go`.
+4. **[`docs/TASKS.md`](docs/TASKS.md)** — the build log: every test we wrote, the change that
+   made it pass, and the findings from an adversarial code-review pass (and how each was fixed).
+   Read this to see *how* the code came to exist, commit by commit.
+
+**Where to find what:**
+
+| Looking for… | Go there |
+|--------------|----------|
+| Why it's designed this way | `docs/rate-limiter-plan.md` |
+| The limiter code | `go/internal/ratelimit/` |
+| How it's wired into the API | `go/internal/app/app.go` (the `/api` middleware) |
+| The tests | `go/internal/ratelimit/ratelimit_test.go`, `go/internal/app/app_test.go` |
+| The commit-by-commit story + review findings | `docs/TASKS.md` |
+| Onboarding for an AI assistant | `CLAUDE.md` |
+
+**A note on the process:** commits are grouped one-per-task and tell the story (`T1…T15` = the
+feature, `F1…F5` = adversarial-review fixes, `G1…G3` = consistency cleanups). Reading the
+history top-to-bottom shows each test appearing with the code that satisfies it.
+
+**Diagrams** are inline [Mermaid](https://mermaid.js.org/) — they render directly on GitHub. To
+view them locally, run **`make diagrams`** (renders to SVG, opens a browser gallery; needs
+Node/`npx`, no editor extension). Optional VS Code inline preview: `make setup` installs the
+`bierner.markdown-mermaid` extension (`Cmd+Shift+V`); if it renders blank under a dark theme, use
+`make diagrams`.
 
 ## Quick Start
 
