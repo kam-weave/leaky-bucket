@@ -206,7 +206,7 @@ followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
   test placed all 10 at the same instant so they aged out together — a test bug; fixed by spacing
   them 1s apart. Implementation was already correct.)_
 - [x] **T14 — Retry-After:** ≈ `60s - (now - oldest)`.
-- [ ] **T15 — factory selection:** `algorithm = "sliding_window_log"` config yields a
+- [x] **T15 — factory selection:** `algorithm = "sliding_window_log"` config yields a
   `SlidingWindowLog`; default yields `LeakyBucket` (proves OCP wiring).
 
 ### Build log (test → implementation, one row per red→green pair)
@@ -229,3 +229,4 @@ _Appended as we complete each step._
 | T12 | window expiry frees capacity | no code change — locks the eviction logic from T11 |
 | T13 | strict rolling window (≤10 in any 60s) | no impl change — test corrected to space requests 1s apart; proves the property leaky bucket can't |
 | T14 | sliding window Retry-After | `slidingwindow.go`: reject branch returns `window - (now - oldest)` |
+| T15 | config-driven algorithm selection | `factory.go` (`Config`, `New()` switch, `Algorithm*` constants); `main.go` builds the limiter via the factory |

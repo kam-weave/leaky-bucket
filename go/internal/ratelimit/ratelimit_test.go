@@ -265,3 +265,33 @@ func TestSlidingWindow_RetryAfter(t *testing.T) {
 		t.Fatalf("RetryAfter after 20s: want ~40s, got %v", d.RetryAfter)
 	}
 }
+
+// T15 — factory selection: New builds the concrete limiter named in the config,
+// defaults to the leaky bucket, and errors on an unknown algorithm. This is the
+// Open/Closed seam — swapping strategies is a config value, not a code change.
+func TestFactory_SelectsAlgorithm(t *testing.T) {
+	now := time.Now()
+	clock := fixedClock(&now)
+	cfg := Config{Limit: 10, Period: time.Minute}
+
+	if rl, err := New(cfg, clock); err != nil {
+		t.Fatalf("default: unexpected error %v", err)
+	} else if _, ok := rl.(*LeakyBucket); !ok {
+		t.Fatalf("default: want *LeakyBucket, got %T", rl)
+	}
+
+	cfg.Algorithm = AlgorithmLeakyBucket
+	if rl, _ := New(cfg, clock); func() bool { _, ok := rl.(*LeakyBucket); return !ok }() {
+		t.Fatal("leaky_bucket: want *LeakyBucket")
+	}
+
+	cfg.Algorithm = AlgorithmSlidingWindowLog
+	if rl, _ := New(cfg, clock); func() bool { _, ok := rl.(*SlidingWindowLog); return !ok }() {
+		t.Fatal("sliding_window_log: want *SlidingWindowLog")
+	}
+
+	cfg.Algorithm = "does_not_exist"
+	if _, err := New(cfg, clock); err == nil {
+		t.Fatal("unknown algorithm: want an error")
+	}
+}
