@@ -38,7 +38,7 @@ func NewRouter(s *store.Store, opts Options) http.Handler {
 		// Rate limit before auth: the limiter is the front door of /api, so
 		// unauthenticated requests count and /health (outside /api) is exempt.
 		if opts.RateLimiter != nil {
-			r.Use(ratelimit.Middleware(opts.RateLimiter))
+			r.Use(ratelimit.Middleware(opts.RateLimiter, nil))
 		}
 		r.Use(auth.RequireAuth)
 

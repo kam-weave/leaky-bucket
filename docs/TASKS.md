@@ -263,3 +263,4 @@ existing benchmarks unaffected (limiter is nil in the shared test harness). File
 | F2 | `TestSlidingWindow_BackwardClockClampsRetryAfter` | `slidingwindow.go` clamps Retry-After to `[0, window]` |
 | F3 | `TestLeakyBucket_ConcurrentWithAdvancingClock`, `TestSlidingWindow_ConcurrentWithAdvancingClock` | `atomicClock` helper; advance clock per call so leak/eviction runs under contention (bound assertions, `-race`) |
 | F4 | `TestHTTP_RetryAfterValueBodyAndRecovery` | asserts exact `Retry-After: 6`, JSON `{"error":...}` body, and clock-driven recovery (no code change) |
+| F5 | `TestMiddleware_LogsRejectionOnly` | `middleware.go` logs rejections via injected `*slog.Logger` (warn; allowed requests silent); `app.go` passes nil → `slog.Default()` |
