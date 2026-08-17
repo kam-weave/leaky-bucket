@@ -264,6 +264,7 @@ existing benchmarks unaffected (limiter is nil in the shared test harness). File
 |-----|------|--------|
 | G1 | existing (F4 body assert) | new `internal/apierr` package; `api.writeError` and rate-limit middleware both delegate to `apierr.Write` |
 | G2 | `TestHTTP_RateLimitHeaders` | `Decision` gains `Limit`/`Remaining` (set by both limiters); middleware emits `RateLimit-Limit`/`-Remaining` on every /api response and `-Reset` on 429 |
+| G3 | `TestHTTP_UnauthorizedIsJSON` | `auth.RequireAuth` now returns the JSON `{"error":...}` envelope via `apierr.Write` (was plain text) |
 
 **Fix commits (same one-per-item pattern):**
 

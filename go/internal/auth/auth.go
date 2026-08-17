@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/weave-lab/interview-public/go/internal/apierr"
 )
 
 type contextKey struct{}
@@ -27,7 +29,7 @@ func TokenParser(next http.Handler) http.Handler {
 func RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if UserID(r.Context()) == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			apierr.Write(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, r)

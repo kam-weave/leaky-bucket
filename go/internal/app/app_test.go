@@ -185,3 +185,28 @@ func TestHTTP_RateLimitHeaders(t *testing.T) {
 		t.Fatal("429 response missing RateLimit-Reset")
 	}
 }
+
+// G3 — 401 is a JSON error envelope: unauthenticated /api requests now return the
+// same {"error": ...} shape as the rest of the API (previously plain text).
+func TestHTTP_UnauthorizedIsJSON(t *testing.T) {
+	srv, _ := newLimitedServer(t, 10)
+
+	resp, err := http.Get(srv.URL + "/api/contacts") // no Authorization header
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type: want application/json, got %q", ct)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding 401 body: %v", err)
+	}
+	if body["error"] == "" {
+		t.Fatalf("401 body: want a JSON error field, got %v", body)
+	}
+}
