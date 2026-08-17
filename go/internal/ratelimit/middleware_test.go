@@ -41,3 +41,30 @@ func TestMiddleware_LogsRejectionOnly(t *testing.T) {
 		t.Fatalf("want exactly one log line, got: %q", logged)
 	}
 }
+
+// stubLimiter returns a fixed Decision, so the middleware's header/floor logic can
+// be tested in isolation from any real algorithm.
+type stubLimiter struct{ d Decision }
+
+func (s stubLimiter) Allow() Decision { return s.d }
+
+// M2 — the Retry-After floor: a sub-second (or zero) wait must still be reported as
+// at least 1 second, and RateLimit-Limit reflects the Decision.
+func TestMiddleware_RetryAfterFlooredToOne(t *testing.T) {
+	rl := stubLimiter{Decision{Allowed: false, RetryAfter: 0, Limit: 10, Remaining: 0}}
+	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+	h := Middleware(rl, logger)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/x", nil))
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After floor: want \"1\", got %q", got)
+	}
+	if got := rec.Header().Get("RateLimit-Limit"); got != "10" {
+		t.Fatalf("RateLimit-Limit: want \"10\", got %q", got)
+	}
+}

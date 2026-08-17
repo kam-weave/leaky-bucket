@@ -42,6 +42,7 @@ short path.
 | How it's wired into the API | `go/internal/app/app.go` (the `/api` middleware) |
 | The tests | `go/internal/ratelimit/ratelimit_test.go`, `go/internal/app/app_test.go` |
 | The commit-by-commit story + review findings | `docs/TASKS.md` |
+| The test strategy (unit / integration / e2e / mutation) and *why* each exists | `docs/testing.md` |
 | Tradeoffs made & future work | `docs/design-tradeoffs.md` |
 | Onboarding for an AI assistant | `CLAUDE.md` |
 

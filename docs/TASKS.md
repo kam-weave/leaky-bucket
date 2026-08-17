@@ -296,3 +296,16 @@ each level is in `docs/testing.md`.
   asserts the 11th burst request → 429 with `Retry-After`. This is the only test covering `main.go`
   wiring, the real clock, and a genuine network round-trip. `make test-e2e` runs it; the normal
   `go test ./...` skips it (tag). Rationale in `docs/testing.md`.
+- [x] **Mutation testing** (`make test-mutation`, via [gremlins](https://gremlins.dev), scoped to
+  `internal/ratelimit`). **Why (interview talking point):** coverage shows what code *ran*, not
+  whether tests would *catch a bug*. Mutation testing flips operators / removes statements and
+  checks the tests fail — measuring test *strength*. It paid off immediately: the first run scored
+  **72.5%** and the survivors were real gaps (the limiters' own tests never asserted
+  `Decision.Remaining`; nothing exercised the middleware's Retry-After "floor to ≥1s"). We added
+  `TestDecision_LimitAndRemaining` and `TestMiddleware_RetryAfterFlooredToOne` (M1/M2), raising
+  efficacy to **~85%**; the rest are equivalent/boundary mutants. Rationale + numbers in
+  `docs/testing.md`, linked from the README review guide.
+
+**Status:** four test levels in place — unit, integration, e2e (tag `e2e`), mutation. `make test`
+(fast: unit + integration), `make test-e2e`, `make test-mutation`. `go vet` + `go test -race ./...`
+clean.

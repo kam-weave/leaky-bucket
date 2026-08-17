@@ -41,3 +41,33 @@ make test-e2e          # or: go test -tags e2e ./e2e/...
 
 The burst of 10 → 429 is asserted without any waiting (the burst is instantaneous); testing
 time-based recovery is left to the unit/integration levels where the clock is injectable.
+
+## Mutation
+
+**Why:** line coverage tells you which code *ran* during tests, not whether the tests would
+*notice if it broke*. A suite can execute 100% of the limiter yet still pass if you flip `<=` to
+`<` or delete an increment. Mutation testing closes that gap: it programmatically introduces small
+faults ("mutants") — flip a comparison, change `+` to `-`, remove a statement — reruns the tests,
+and reports how many mutants were **killed** (a test failed, good) vs **survived** (no test
+noticed, a real gap). It measures the *strength* of the tests, which is what actually protects the
+code.
+
+**Tool:** [gremlins](https://gremlins.dev), scoped to `go/internal/ratelimit/`.
+
+```bash
+make test-mutation
+```
+
+**What it found here (a concrete example of the value):** the first run scored **72.5%** efficacy.
+The survivors were genuine gaps — the limiters' unit tests never asserted `Decision.Remaining`
+(only the HTTP layer did), and nothing exercised the middleware's "round Retry-After up to at
+least 1 second" floor. We added two targeted tests (`TestDecision_LimitAndRemaining`,
+`TestMiddleware_RetryAfterFlooredToOne`), which raised efficacy to **~85%**. The handful of
+remaining survivors are equivalent/boundary mutants (e.g. `>` vs `>=` on a clamp that produces the
+same result) — not worth chasing. The point isn't a perfect score; it's that mutation testing
+*drove real test improvements that coverage alone would never have surfaced.*
+
+**Running it reliably:** `make test-mutation` sets `GOFLAGS=-count=1`. Without it, Go's cached
+test results make gremlins measure a near-zero baseline time and then time out every mutant that
+must recompile — a subtle interaction worth knowing about when wiring mutation testing into a Go
+project.
