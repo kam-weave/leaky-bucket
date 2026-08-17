@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/weave-lab/interview-public/go/internal/app"
+	"github.com/weave-lab/interview-public/go/internal/ratelimit"
 	"github.com/weave-lab/interview-public/go/internal/seed"
 	"github.com/weave-lab/interview-public/go/internal/store"
 )
@@ -62,7 +63,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	r := app.NewRouter(s, app.Options{EnableLogging: true})
+	// Global rate limit: 10 requests/minute across all clients, applied to /api.
+	limiter := ratelimit.NewLeakyBucket(10, time.Minute, time.Now)
+	r := app.NewRouter(s, app.Options{EnableLogging: true, RateLimiter: limiter})
 
 	srv := &http.Server{
 		Addr:    *addr,
