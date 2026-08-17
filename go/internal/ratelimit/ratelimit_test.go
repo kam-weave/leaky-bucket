@@ -1,6 +1,8 @@
 package ratelimit
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -136,5 +138,32 @@ func TestLeakyBucket_RetryAfter(t *testing.T) {
 	}
 	if d.RetryAfter < 2*time.Second+900*time.Millisecond || d.RetryAfter > 3*time.Second {
 		t.Fatalf("RetryAfter after 3s: want ~3s, got %v", d.RetryAfter)
+	}
+}
+
+// T7 — thread-safety: with a frozen clock (no leak), many goroutines hammering the
+// limiter must admit no more than capacity in total. Run with -race to detect any
+// unsynchronized access to the shared state.
+func TestLeakyBucket_ConcurrentNeverExceedsCapacity(t *testing.T) {
+	now := time.Now()
+	lb := NewLeakyBucket(10, time.Minute, fixedClock(&now))
+
+	var allowed int64
+	var wg sync.WaitGroup
+	for g := 0; g < 50; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				if lb.Allow().Allowed {
+					atomic.AddInt64(&allowed, 1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if allowed != 10 {
+		t.Fatalf("concurrent admits: want exactly 10 (capacity), got %d", allowed)
 	}
 }

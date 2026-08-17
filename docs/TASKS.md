@@ -187,7 +187,7 @@ followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
   next burst of 10 is allowed again; level never exceeds capacity.
 - [x] **T6 — Retry-After:** on reject, `Decision.RetryAfter` ≈ time until one slot frees (~6s),
   and shrinks as the clock advances.
-- [ ] **T7 — thread-safety:** N goroutines issuing M calls never allow more than capacity within
+- [x] **T7 — thread-safety:** N goroutines issuing M calls never allow more than capacity within
   a frozen-clock window (`-race`); smoke test for the single-critical-section invariant.
 
 **HTTP integration (dedicated router + injected clock, NOT the shared testServer):**
@@ -219,3 +219,4 @@ _Appended as we complete each step._
 | T4 | rejections don't consume capacity | no code change — level only rises on accept |
 | T5 | floor at 0 + full recovery after idle | no code change — `level < 0` clamp from T1 |
 | T6 | Retry-After on reject | `leakybucket.go`: reject branch now returns `RetryAfter = deficit/leakPerNano` (time until level drops to capacity-1) |
+| T7 | concurrent never exceeds capacity (`-race`) | no code change — verified the `sync.Mutex` critical section is clean under the race detector |
