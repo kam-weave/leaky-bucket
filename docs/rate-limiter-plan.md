@@ -113,6 +113,40 @@ logging inside the lock. The section is O(1) arithmetic, so single-lock contenti
 _(TS mental model: Node's single-threaded event loop needs no lock — but only while the method
 stays synchronous.)_
 
+### TypeScript reasoning aid (how my TS experience maps to Go)
+
+Most of my experience is in TypeScript and I've worked in Go only a little (though I really enjoy
+it), so I sketched the counter in TS first to reason about the algorithm and the concurrency model
+before writing the Go. It's a mental-model aid, not a deliverable — but it's exactly where the
+"Go needs a mutex here" insight came from:
+
+```ts
+type Clock = () => number; // epoch millis, injected for deterministic tests
+
+class LeakyBucket {
+  private level = 0;
+  private last = this.now();
+  constructor(
+    private readonly capacity: number,      // 10
+    private readonly ratePerMs: number,     // capacity / 60_000
+    private readonly now: Clock = Date.now,
+  ) {}
+
+  tryAcquire(): boolean {
+    const t = this.now();
+    this.level = Math.max(0, this.level - (t - this.last) * this.ratePerMs);
+    this.last = t;
+    if (this.level + 1 <= this.capacity) { this.level += 1; return true; }
+    return false;
+  }
+}
+```
+
+The key thing porting to Go: in TS this whole method is safe *for free* because Node's
+single-threaded event loop can't interleave a synchronous function. Go serves each request on its
+own goroutine, so the same read-modify-write **must** be wrapped in a `sync.Mutex` — which is what
+`leakybucket.go` does. Same algorithm, one deliberate concurrency difference.
+
 ### Clock injection
 
 Time is injected so tests are deterministic (no real `sleep`). Go `type Clock func() time.Time`
