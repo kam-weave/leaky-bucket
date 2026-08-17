@@ -13,6 +13,13 @@ func fixedClock(t *time.Time) Clock {
 	return func() time.Time { return *t }
 }
 
+// atomicClock returns a clock backed by an atomic nanosecond offset, so it can be
+// advanced from other goroutines during a concurrency test without racing the clock
+// itself (unlike fixedClock).
+func atomicClock(base time.Time, ns *int64) Clock {
+	return func() time.Time { return base.Add(time.Duration(atomic.LoadInt64(ns))) }
+}
+
 // T1 — allow N, reject N+1: with capacity 10, the first 10 calls are allowed and
 // the 11th (at level == capacity) is rejected.
 func TestLeakyBucket_AllowsNRejectsNPlus1(t *testing.T) {
@@ -165,6 +172,75 @@ func TestLeakyBucket_ConcurrentNeverExceedsCapacity(t *testing.T) {
 
 	if allowed != 10 {
 		t.Fatalf("concurrent admits: want exactly 10 (capacity), got %d", allowed)
+	}
+}
+
+// V3a — leaky bucket under an ADVANCING clock: each call advances the clock, so the
+// leak branch (level -= …, last = now) runs under contention — the mutation path the
+// frozen-clock test never exercises. Admits at most capacity + what leaked over the
+// deterministic elapsed time.
+func TestLeakyBucket_ConcurrentWithAdvancingClock(t *testing.T) {
+	const goroutines, perG = 50, 200
+	const step = int64(time.Millisecond)
+
+	base := time.Now()
+	var ns int64
+	lb := NewLeakyBucket(10, time.Minute, atomicClock(base, &ns))
+
+	var allowed int64
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perG; i++ {
+				atomic.AddInt64(&ns, step)
+				if lb.Allow().Allowed {
+					atomic.AddInt64(&allowed, 1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	elapsed := time.Duration(int64(goroutines*perG) * step)
+	maxLeaked := elapsed.Seconds() * (10.0 / 60.0)
+	upper := int64(10) + int64(maxLeaked) + 2 // capacity + leaked + slack
+	if allowed < 10 || allowed > upper {
+		t.Fatalf("admitted %d, want within [10, %d] over %v", allowed, upper, elapsed)
+	}
+}
+
+// V3b — sliding window under an ADVANCING clock: entries age out during the run, so
+// the eviction path runs under contention. Admits at most ~limit per rolling window.
+func TestSlidingWindow_ConcurrentWithAdvancingClock(t *testing.T) {
+	const goroutines, perG = 50, 200
+	const step = int64(12 * time.Millisecond) // ~120s total → forces eviction
+
+	base := time.Now()
+	var ns int64
+	sw := NewSlidingWindowLog(10, time.Minute, atomicClock(base, &ns))
+
+	var allowed int64
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perG; i++ {
+				atomic.AddInt64(&ns, step)
+				if sw.Allow().Allowed {
+					atomic.AddInt64(&allowed, 1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	elapsed := time.Duration(int64(goroutines*perG) * step)
+	upper := int64(10)*(1+int64(elapsed/time.Minute)) + 2 // ~limit per window + slack
+	if allowed < 10 || allowed > upper {
+		t.Fatalf("admitted %d, want within [10, %d] over %v", allowed, upper, elapsed)
 	}
 }
 
