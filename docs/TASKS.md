@@ -291,3 +291,8 @@ each level is in `docs/testing.md`.
   enforcing a strict rolling cap end-to-end through the router
   (`TestIntegration_SlidingWindowStrictThroughRouter`). Documented the unit/integration/e2e/mutation
   rationale in `docs/testing.md`.
+- [x] **E2E suite** (`go/e2e/`, build tag `e2e`) — builds the real server binary, seeds a temp
+  SQLite DB, runs it as an OS process, and hits it over a real socket. `TestE2E_RateLimitReturns429`
+  asserts the 11th burst request → 429 with `Retry-After`. This is the only test covering `main.go`
+  wiring, the real clock, and a genuine network round-trip. `make test-e2e` runs it; the normal
+  `go test ./...` skips it (tag). Rationale in `docs/testing.md`.
