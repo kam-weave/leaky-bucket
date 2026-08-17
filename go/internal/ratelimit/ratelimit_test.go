@@ -183,3 +183,23 @@ func TestSlidingWindow_AllowsNRejectsNPlus1(t *testing.T) {
 		t.Fatal("request 11: want rejected, got allowed")
 	}
 }
+
+// T12 — oldest ages out: once the window fully passes, the earlier requests leave
+// it and capacity is available again.
+func TestSlidingWindow_OldestAgesOut(t *testing.T) {
+	now := time.Now()
+	sw := NewSlidingWindowLog(10, time.Minute, fixedClock(&now))
+	for i := 0; i < 10; i++ {
+		sw.Allow()
+	}
+	if d := sw.Allow(); d.Allowed {
+		t.Fatal("window should be full")
+	}
+
+	now = now.Add(time.Minute + time.Millisecond) // all 10 age out
+	for i := 1; i <= 10; i++ {
+		if d := sw.Allow(); !d.Allowed {
+			t.Fatalf("after window elapsed, request %d: want allowed, got rejected", i)
+		}
+	}
+}

@@ -199,7 +199,7 @@ followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
 
 **Strategy 2 — `SlidingWindowLog` (strict ≤10/rolling-60s), same interface:**
 - [x] **T11 — allow 10 / reject 11th** within the window.
-- [ ] **T12 — oldest ages out:** advance clock so the oldest timestamp exits the 60s window →
+- [x] **T12 — oldest ages out:** advance clock so the oldest timestamp exits the 60s window →
   one slot frees.
 - [ ] **T13 — strict rolling window:** spread 10 across the window, then a burst at the end still
   can't exceed 10 in any 60s span (the property leaky bucket fails).
@@ -224,3 +224,4 @@ _Appended as we complete each step._
 | T9 | /health exempt | no code change — limiter lives inside the `/api` subtree, `/health` is outside it |
 | T10 | unauthenticated requests count | no code change — confirms the before-auth placement (429 preempts 401 once full) |
 | T11 | sliding window allows 10, rejects 11th | `slidingwindow.go` — `NewSlidingWindowLog`, mutex-guarded evict→count→append `Allow()` (same `RateLimiter` interface) |
+| T12 | window expiry frees capacity | no code change — locks the eviction logic from T11 |
