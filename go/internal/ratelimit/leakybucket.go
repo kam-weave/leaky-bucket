@@ -53,7 +53,7 @@ func (b *LeakyBucket) Allow() Decision {
 
 	if b.level+1 <= b.capacity {
 		b.level++
-		return Decision{Allowed: true}
+		return Decision{Allowed: true, Limit: int(b.capacity), Remaining: b.remaining()}
 	}
 
 	// Rejected: report how long until enough leaks out to admit one request, i.e.
@@ -62,5 +62,17 @@ func (b *LeakyBucket) Allow() Decision {
 	return Decision{
 		Allowed:    false,
 		RetryAfter: time.Duration(deficit / b.leakPerNano),
+		Limit:      int(b.capacity),
+		Remaining:  b.remaining(),
 	}
+}
+
+// remaining is the whole number of requests that could be admitted right now.
+// Caller must hold b.mu.
+func (b *LeakyBucket) remaining() int {
+	r := int(b.capacity - b.level)
+	if r < 0 {
+		return 0
+	}
+	return r
 }

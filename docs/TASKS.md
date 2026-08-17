@@ -263,6 +263,7 @@ existing benchmarks unaffected (limiter is nil in the shared test harness). File
 | Fix | Test | Change |
 |-----|------|--------|
 | G1 | existing (F4 body assert) | new `internal/apierr` package; `api.writeError` and rate-limit middleware both delegate to `apierr.Write` |
+| G2 | `TestHTTP_RateLimitHeaders` | `Decision` gains `Limit`/`Remaining` (set by both limiters); middleware emits `RateLimit-Limit`/`-Remaining` on every /api response and `-Reset` on 429 |
 
 **Fix commits (same one-per-item pattern):**
 

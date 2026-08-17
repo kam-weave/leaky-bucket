@@ -154,3 +154,34 @@ func TestHTTP_RetryAfterValueBodyAndRecovery(t *testing.T) {
 		t.Fatal("after advancing 6s: want recovery, still got 429")
 	}
 }
+
+// G2 — RateLimit-* headers: every /api response advertises the limit and remaining
+// budget; a 429 also carries RateLimit-Reset.
+func TestHTTP_RateLimitHeaders(t *testing.T) {
+	srv, _ := newLimitedServer(t, 10)
+
+	resp := authedGet(t, srv.URL+"/api/contacts") // request 1 of 10
+	resp.Body.Close()
+	if got := resp.Header.Get("RateLimit-Limit"); got != "10" {
+		t.Fatalf("RateLimit-Limit: want \"10\", got %q", got)
+	}
+	if got := resp.Header.Get("RateLimit-Remaining"); got != "9" {
+		t.Fatalf("RateLimit-Remaining after 1st: want \"9\", got %q", got)
+	}
+
+	for i := 0; i < 9; i++ { // exhaust the remaining budget (requests 2..10)
+		authedGet(t, srv.URL+"/api/contacts").Body.Close()
+	}
+
+	over := authedGet(t, srv.URL+"/api/contacts") // request 11 → 429
+	defer over.Body.Close()
+	if over.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("11th request: want 429, got %d", over.StatusCode)
+	}
+	if got := over.Header.Get("RateLimit-Remaining"); got != "0" {
+		t.Fatalf("RateLimit-Remaining on 429: want \"0\", got %q", got)
+	}
+	if over.Header.Get("RateLimit-Reset") == "" {
+		t.Fatal("429 response missing RateLimit-Reset")
+	}
+}

@@ -22,6 +22,8 @@ func Middleware(rl RateLimiter, logger *slog.Logger) func(http.Handler) http.Han
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			d := rl.Allow()
+			w.Header().Set("RateLimit-Limit", strconv.Itoa(d.Limit))
+			w.Header().Set("RateLimit-Remaining", strconv.Itoa(d.Remaining))
 			if d.Allowed {
 				next.ServeHTTP(w, r)
 				return
@@ -33,6 +35,7 @@ func Middleware(rl RateLimiter, logger *slog.Logger) func(http.Handler) http.Han
 			}
 			logger.Warn("rate limit exceeded",
 				"method", r.Method, "path", r.URL.Path, "retry_after_s", secs)
+			w.Header().Set("RateLimit-Reset", strconv.Itoa(secs))
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
 			apierr.Write(w, http.StatusTooManyRequests, "rate limit exceeded")
 		})

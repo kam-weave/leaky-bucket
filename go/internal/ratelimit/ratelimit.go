@@ -14,10 +14,13 @@ type Clock func() time.Time
 
 // Decision is the result of an admission check. RetryAfter is meaningful only
 // when Allowed is false: it estimates how long until the next request would be
-// admitted, and is surfaced to clients via the HTTP Retry-After header.
+// admitted, and is surfaced to clients via the HTTP Retry-After header. Limit and
+// Remaining populate the RateLimit-Limit / RateLimit-Remaining headers.
 type Decision struct {
 	Allowed    bool
 	RetryAfter time.Duration
+	Limit      int // the configured ceiling
+	Remaining  int // capacity left after this decision (>= 0)
 }
 
 // RateLimiter decides whether a single request may proceed. Implementations must
