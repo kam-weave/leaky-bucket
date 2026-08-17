@@ -159,6 +159,14 @@ The red-team caught **real design bugs, not nitpicks** — good story about usin
   requests count (plan says yes); (c) exemptions beyond `/health`. Leaning: ship both strategies
   behind the seam, default to leaky bucket, let the interviewer steer the rest live.
 
+- [x] **Simplified `rate-limiter-plan.md`** (351 → ~170 lines) before building: merged the
+  overlapping sections (meter-vs-shaper appeared in both §2 and §7; decisions duplicated across
+  §5/§6), led with a compact **confirmed-decisions table**, trimmed the oversized TS singleton
+  code to a one-line mental-model note, and folded the adversarial findings into a short
+  talking-points appendix. Structure is now: Assignment → Decisions → Algorithms (leaky +
+  sliding-window) → Architecture (interface/placement/concurrency/clock) → Build plan → Appendix.
+  Content/decisions preserved; diagram still renders.
+
 ## Phase 2 — Implementation (not started)
 
 **Decisions confirmed:** implement in **both Go and Java**; **`/health` is exempt** (limiter

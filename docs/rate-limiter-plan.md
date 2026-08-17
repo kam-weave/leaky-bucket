@@ -1,25 +1,43 @@
-# Leaky Bucket Rate Limiter — Design & Implementation Plan
+# Rate Limiter — Design & Build Plan
 
-## 1. What the assignment asks for
+## 1. Assignment
 
-- Process-local (in-memory, single process) — **no Redis/distributed state**.
-- **Global** limit — one shared bucket for *all* clients, not per-IP/per-token.
-- **10 requests / minute**.
-- Clean, readable, maintainable; tests + docs.
+A **process-local** (in-memory, no distributed state), **global** rate limiter — one shared
+bucket for *all* clients — allowing **10 requests / minute**. Clean, tested, documented.
+Implement in **both Go and Java** with identical behavior. (TypeScript appears only as a
+mental-model aid; it is not a deliverable.)
 
-## 2. Leaky Bucket, the two variants
+## 2. Confirmed decisions
 
-The "leaky bucket" name covers two closely related models:
+| Decision | Choice |
+|----------|--------|
+| Algorithm (default) | **Leaky bucket**, counter form (reject on overflow — see §3) |
+| Second algorithm (pre-built) | **Sliding-window log** for a *strict* ≤10/60s (§3.2), selectable by config |
+| Scope | One global bucket; applies to **`/api/**` only** — `/health` is exempt |
+| Placement | **Before auth**, as the front door of `/api`, in both stacks → unauthenticated requests count |
+| On reject | **HTTP 429** + `Retry-After: <seconds>` + each stack's existing error-JSON body; log at warn/debug |
+| Concurrency | One lock guards the *entire* read-modify-write (§4) |
+| Time | Injected clock for deterministic tests; monotonic where possible (§4) |
 
-1. **Leaky bucket as a queue (meter/shaper).** Requests enter a FIFO queue (the bucket).
-   They *leak out* (are processed) at a fixed rate. If the bucket is full, new requests
-   are dropped/rejected. This *smooths* bursts into a constant output rate.
-2. **Leaky bucket as a counter (the common web-rate-limit form).** A counter represents
-   the current "water level." Each request adds 1 unit. The bucket leaks continuously at
-   a constant rate (capacity / period). If adding 1 would overflow capacity, reject.
+Open for confirmation (defaults in force, not blockers): (a) strict vs smoothed is now a
+**config flip** (sliding-window log is pre-built); (b) unauthenticated `/api` requests count —
+current default **yes**; (c) exemptions beyond `/health` (e.g. CORS `OPTIONS`, large
+uploads/exports whose single call locks out everyone for a minute).
 
-For an HTTP rate limiter we want variant **2** (the counter form) — it's the standard,
-allocation-free, O(1) approach and maps directly to "N requests per minute."
+## 3. The algorithms
+
+### 3.1 Leaky bucket (default) — counter form
+
+A "water level" that each request raises by 1 and that leaks continuously at `capacity / period`.
+Reject when it would overflow. O(1), allocation-free.
+
+- `capacity = 10`, `leakRatePerSecond = 10 / 60 ≈ 0.1667`.
+- Per request (whole block is one critical section, §4):
+  1. `elapsed = max(0, now - last)`; `level = max(0, level - elapsed*rate)`; `last = now`
+     (update `last` on **every** call, accept or reject).
+  2. `level + 1 <= capacity` → accept, `level += 1`. Else → reject. (Rejects don't consume.)
+- Invariant `0 <= level <= capacity`. Off-by-one is deliberate: 10th allowed, 11th (at
+  `level == capacity`) rejected.
 
 ```mermaid
 %%{init: {'theme':'default'}}%%
@@ -32,319 +50,123 @@ flowchart TD
     style ok fill:#c8e6c9,stroke:#1b5e20
 ```
 
-One shared, mutex-guarded bucket serves all clients (the global limit). Steps below.
-
-### Chosen model (counter form)
-
-- `capacity = 10` (max water the bucket holds → burst ceiling).
-- `leakRatePerSecond = capacity / 60 = 10/60 ≈ 0.1667` units/sec.
-- On each request (the **whole** block is one atomic critical section — see §6.2):
-  1. `elapsed = max(0, now - last)` (clamp so a backward clock can't inflate the level);
-     leak `elapsed * leakRate`; `level = max(0, level - leaked)`; set `last = now`. **Update
-     `last` on every call**, accept or reject.
-  2. If `level + 1 <= capacity`: accept, `level += 1`. (Rejected requests do **not** consume
-     capacity — `level` only rises on accept.)
-  3. Else: reject with **HTTP 429 Too Many Requests**.
-- Invariant: `0 ≤ level ≤ capacity` at all times.
-
-**Exact guarantee (state this; don't oversell "10/min").** This is *leaky-bucket smoothing*,
-not a strict rolling window: it permits a **burst of 10, then ~1 slot every 6s**. Worst case
-across a poorly-aligned 60s window is ~**20** (10 burst + ~10 leaked), not 10. Off-by-one is
-deliberate: the 10th request is allowed, the 11th (at `level == capacity`) is rejected.
+**Exact guarantee — state this, don't oversell "10/min".** This is *smoothing*, not a strict
+window: burst of 10, then ~1 slot every 6s. Worst case across a poorly-aligned 60s window is
+~20 (10 burst + ~10 leaked). Only a sliding-window log gives a literal ≤10/60s:
 
 | Model | Worst case / 60s | Note |
 |-------|------------------|------|
-| Fixed window | up to ~20 at boundary | naive "per minute" |
-| Sliding-window log | exactly 10 | only literal-correct option; O(n) memory |
-| **Leaky bucket (chosen)** | ~20 | smooth drip, O(1), allocation-free |
+| Fixed window | ~20 at boundary | naive "per minute" |
+| **Leaky bucket (default)** | ~20 | smooth drip, O(1) |
 | Token bucket | ~20 | equivalent here |
+| Sliding-window log | exactly 10 | strict; O(n) memory |
 
-If the grader requires a strict "never >10 in any 60s window," only a sliding-window log
-delivers it — leaky/token buckets cannot. **Open decision (§6.1):** confirm burst-smoothing is
-acceptable.
+### 3.2 Sliding-window log (pre-built alternative) — strict ≤10 per rolling 60s
 
-### TypeScript equivalent (mental model)
+State is a queue of accepted-request timestamps. Per request (one critical section): evict
+timestamps older than `now - 60s`; if fewer than 10 remain, accept and append `now`; else reject
+with `Retry-After = 60s - (now - oldest)`. Trade-off: exact, but O(n) memory (trivial at 10) and
+no burst-shaping. Implements the same interface (§4) and is selected by config — so switching
+strict ↔ smoothed is a config value, not a rebuild.
 
-The same counter form in idiomatic TS, with the clock injected for deterministic tests:
+## 4. Architecture
 
-```ts
-type Clock = () => number; // epoch millis
+### Interface (Open/Closed)
 
-export class LeakyBucket {
-  private level = 0;
-  private last: number;
-
-  constructor(
-    private readonly capacity: number,   // 10
-    private readonly ratePerMs: number,  // capacity / 60_000  (leak per ms)
-    private readonly now: Clock = Date.now,
-  ) {
-    this.last = now();
-  }
-
-  /** Consumes one slot and returns true if the request is allowed. */
-  tryAcquire(): boolean {
-    const t = this.now();
-    this.level = Math.max(0, this.level - (t - this.last) * this.ratePerMs);
-    this.last = t;
-    if (this.level + 1 <= this.capacity) {
-      this.level += 1;
-      return true;
-    }
-    return false;
-  }
-}
-```
-
-**Key concurrency difference vs. Go/Java.** Go serves each request on its own goroutine and
-Java on its own Tomcat worker thread, so the shared bucket **must** be guarded by a
-`sync.Mutex` / lock. Node.js runs a **single-threaded event loop**, so `tryAcquire()` — being
-fully synchronous with no `await` between the read and the write — runs to completion without
-interleaving. **No lock is needed** as long as that method never becomes `async`. That's the TS
-mental model: the event loop *is* your mutex, but only across synchronous sections.
-
-## 3. Where it plugs in
-
-All three stacks must guarantee the **single global instance** — one bucket for the whole
-process. Each enforces it idiomatically:
-
-- **Go:** a middleware wrapping the API mux — see `docs/architecture-go.md` (§ request
-  pipeline). Returns 429 before the handler runs.
-  - *Single-instance enforcement:* construct the bucket **once at the composition root**
-    (`NewRouter`) and capture it in the middleware closure — the same place the router and
-    store are already wired. Keep the struct fields unexported and expose only
-    `NewLeakyBucket(...) *LeakyBucket` + a `tryAcquire`-style method, so state can't be mutated
-    from outside. Prefer this constructor-injection over a package-level global; if a hard
-    process-wide singleton is ever wanted, wrap creation in `sync.Once`, but injection stays
-    more testable (each test builds its own bucket with a fake clock). The router is itself
-    built once in `main`, so exactly one bucket exists.
-- **Java:** a servlet `Filter` (or `HandlerInterceptor`) registered globally — see
-  `docs/architecture-java.md`.
-  - *Single-instance enforcement:* Spring beans are **singleton-scoped by default**, so
-    declaring the limiter a single `@Component` (or `@Bean`) means the container creates exactly
-    one instance and injects that same object everywhere. That's the framework enforcing the
-    invariant for us. Harden it by giving the filter the bucket via **constructor injection**
-    (no `new` in app code) and keeping any manual constructor package-private so nothing outside
-    can build a second one. Unit tests still `new` an isolated bucket directly with a fake
-    clock.
-- **TypeScript (equivalent):** the limit is **global**, so the app must hold exactly one
-  bucket — the TS design has to enforce that, the same way Go creates it once in `NewRouter`
-  and Java registers a single `@Component` bean. Split the two concerns:
-
-  **1. Mechanism** (`leaky-bucket.ts`) — the `LeakyBucket` class above stays freely
-  constructable, but *only so unit tests can spin up isolated instances with a fake clock*.
-  App code never imports it directly.
-
-  **2. App-wide singleton** (`rate-limiter.ts`) — construct the one shared bucket here and
-  export only the middleware. Node caches modules, so this instance is created once and every
-  importer shares it; because the class isn't re-exported, app code *cannot* `new` its own:
-  ```ts
-  import { LeakyBucket } from "./leaky-bucket";
-
-  const bucket = new LeakyBucket(10, 10 / 60_000); // the ONE global bucket
-
-  export const rateLimit: RequestHandler = (_req, res, next) =>
-    bucket.tryAcquire() ? next() : res.status(429).json({ error: "rate limit exceeded" });
-  // app.use("/api", rateLimit) → scoped to /api, so /health stays exempt (mirrors Go/Java).
-  ```
-  Fastify would be the analogous `preHandler` hook on the `/api` scope.
-
-  (A private-constructor + static-accessor singleton would enforce this *within* a module too,
-  but it bakes the clock/config in at first call — worse for testing — so the module-singleton
-  above is the cleaner analog to how Go/Java wire the single instance at composition time.)
-
-> **Scope reminder:** TypeScript here is a *reasoning aid only* — not a deliverable. Ship Go +
-> Java. Don't port the TS singleton patterns into either.
-
-_(Exact file/line insertion points filled in from the architecture docs.)_
-
-## 4. Red → Green implementation plan (single small commits)
-
-One failing-test commit → one make-it-pass commit, **one assertion per step**. Step 0 also
-introduces the `RateLimiter` interface (§8) so the middleware programs to the interface from the
-first commit; `LeakyBucket` is the first implementation. Config comes first because the core test
-needs the `(capacity, period)` constructor to exist. The clock is
-injected so time is deterministic — **no real `sleep`**. Fixed per-stack signatures:
-**Go `type Clock func() time.Time`** (elapsed via `.Sub`, monotonic); **Java `java.time.Clock`**
-(`clock.instant()`), with elapsed clamped `>= 0` since `Instant` isn't monotonic.
-
-0. **Config shape** — `(capacity, period)`; derive `rate = capacity/period` internally (one
-   source of truth). Surface it on the existing config seam (Go `app.Options`; Java
-   `@ConfigurationProperties`/`application.properties`), so tests/benchmarks can relax it.
-1. **Allow N / reject N+1** — 10 immediate calls allowed, 11th rejected (at `level==capacity`).
-2. **Leak frees a slot** — fill, advance the fake clock past one interval, next call allowed
-   (proves *leak-then-check* ordering, not check-then-leak).
-3. **Rejections don't consume** — a burst of rejects doesn't push recovery out; `last` advances
-   on reject; leak resumes on schedule.
-4. **Thread-safety** (Go/Java) — N goroutines/threads never exceed capacity (smoke test for the
-   single-critical-section invariant, §6.2). _(TS: N/A — assert a synchronous 11-call loop = 10
-   `true` then `false`.)_
-5. **HTTP 429 contract** — build a **dedicated** router/server with a *fresh* bucket + injected
-   clock (do **not** reuse the shared `testServer`; see §6.3). Assert 11th `/api` request →
-   `429` **and** `Retry-After` header. `/health` never 429s.
-6. **Wire into the app** + one end-to-end test on real routes.
-7. **Docs** — short README section: the exact guarantee (§2), tuning knobs, exemptions.
-
-## 5. Decisions (confirmed)
-
-- **Scope: both Go and Java**, identical behavior; TS is a reasoning aid only.
-- **`/health` is exempt** — limiter applies to `/api/**` only.
-- **Placement is identical in both stacks** (resolves the auth-ordering divergence, §6.4):
-  the limiter runs **as the first thing on `/api`, before auth** — so it is a true global API
-  front door and unauthenticated requests **do** count. Go → `r.Use(rateLimit)` *before*
-  `RequireAuth` inside the `/api` subtree; Java → keep the servlet filter but **scope it to
-  `/api/**`** (skip other paths) so `/health` stays exempt.
-- **Java uses `OncePerRequestFilter` + `FilterRegistrationBean`** (dispatch `REQUEST` only) so
-  async re-dispatch can't double-count one request (§6.5).
-- **429 body + `Retry-After`** are part of the contract, not optional: 429 with each stack's
-  existing error-JSON shape (Go `writeError`, Java error body) plus `Retry-After: <seconds>`
-  (~6s/slot). `X-RateLimit-Limit: 10` optional.
-- **Rejections logged** at warn/debug (not per allowed request) so firing is observable.
-- **The limiter never reads `userId`** — it's global; reading auth state invites accidental
-  per-user logic.
-
-## 6. Adversarial review — findings & resolutions
-
-Three review agents (algorithm, concurrency, HTTP/API) red-teamed this plan pre-implementation.
-Key issues and how the plan now answers them:
-
-1. **"10/min" overstated** → §2 states the exact guarantee (burst 10 + ~10 leaked ≈ 20/60s) and
-   the model comparison. **Open decision:** confirm burst-smoothing is acceptable vs a strict
-   sliding window.
-2. **Atomicity** → the *entire* leak→check→increment (incl. clock read) is **one** locked
-   critical section: Go `mu.Lock()/defer Unlock()`, Java one `ReentrantLock`/`synchronized`
-   covering **all** access to `level`/`last` (so no `volatile` needed). No lock-free fast path;
-   no I/O or logging inside the lock.
-3. **Shared Go test harness** → the single `testServer`/bucket in `TestMain` makes limiter state
-   leak across tests and would 429 the benchmarks. **Resolution:** limiter HTTP tests build
-   their own router+bucket+clock; benchmarks/other tests run with the limiter relaxed via the
-   §4.0 config (high/effectively-infinite capacity).
-4. **Auth-ordering divergence** (Go limited after auth, Java before) → unified in §5:
-   limiter before auth in both; unauthenticated requests count.
-5. **Java async double-count** → `OncePerRequestFilter`, dispatch `REQUEST` only (§5).
-6. **Clock source** → monotonic where possible (Go `time.Now().Sub`; Java clamp elapsed ≥ 0);
-   single fixed signature per stack (§4); one canonical time unit so Go/Java arithmetic agrees.
-7. **HTTP-test clock seam** → provide a test-only `NewRouterWithClock` (Go) / `@TestConfiguration`
-   overriding the `Clock` bean (Java) so the test controls the same clock the server uses;
-   otherwise HTTP tests only assert the immediate burst→429 (state which).
-8. **Single-lock contention** → acceptable: O(1) arithmetic critical section, no I/O; lock-free
-   CAS rejected (two-field float state doesn't pack into one atomic word).
-
-**Still open for the user (see §6.1):** (a) default is burst-smoothing (`LeakyBucket`); the
-*strict* rolling-60s cap is pre-built as `SlidingWindowLog` (§8.1) and one config flip away, so
-this is now a runtime choice, not a rebuild. (b) should unauthenticated `/api` requests count
-(current plan: yes)?
-(c) any endpoints beyond `/health` to exempt — e.g. CORS `OPTIONS` preflight, large
-uploads/exports whose single call would lock out everyone for a minute?
-
-## 7. Interpretation & live-evolution path
-
-The brief gives only "**10 requests / minute**" + "**Leaky Bucket**." It leaves the exact
-semantics open, and the interview is expected to evolve the design live. This section is the map
-so we're never boxed in.
-
-**A. Meter (reject) vs shaper (queue) — we build the meter.** On overflow we **reject
-immediately with 429**; there is *no* queue, so request *duration* is irrelevant and nothing
-"backs up." The **shaper** variant instead delays requests through a FIFO that leaks at a fixed
-rate — which introduces queue depth, latency, and long-running-request backpressure. We're
-deliberately not building the shaper unless asked; a fast 429 beats a hung connection for an API.
-
-**B. "Naive" vs "smoothed" is an algorithm switch, not a knob.** A naive "10/min" is usually a
-*fixed-window counter* (resets each minute; ~20 across a boundary) — a **different** algorithm.
-Our leaky bucket already *is* the smoothed "burst 10 then drip" form; there is no simpler leaky
-bucket. So "start naive, then add smoothing" really means fixed-window → leaky bucket.
-
-**C. Rate limiting ≠ concurrency limiting.** We cap *admissions over time*, not *in-flight
-requests*. Guarding against many simultaneous slow requests is a separate tool (semaphore /
-bulkhead). Name this if the interviewer asks "what about a slow request?"
-
-**Stance for the live session.** Ship the clean **meter-variant leaky bucket** first (on-brief,
-tested), but keep it behind a **one-method seam** (`tryAcquire()` + the middleware/filter). That
-makes every likely pivot a contained swap that touches neither the pipeline wiring nor the test
-structure:
-
-| If the interviewer wants… | What changes | Blast radius |
-|---------------------------|--------------|--------------|
-| Fixed-window first, then leaky | swap the algorithm behind `tryAcquire()` | one file |
-| Shaper/queue (delay not reject) | `tryAcquire()` → an async `acquire()` that waits | limiter + handler await |
-| Token bucket | swap the algorithm | one file |
-| Per-client instead of global | key the buckets by client id (map) | limiter internals |
-| Strict rolling-60s cap | flip config to the pre-built `SlidingWindowLog` (§8.1) | config value |
-
-## 8. Extensibility — the `RateLimiter` interface (Open/Closed)
-
-The pivots in §7 are only "one file" if we design for them now. So the algorithm sits behind a
-small **interface** (Strategy pattern): the HTTP middleware/filter and the app wiring depend on
-the *interface*, never a concrete algorithm. Adding an algorithm = **add a new type + one
-factory case**; nothing existing is edited. That's Open/Closed: closed to modification, open to
-extension.
-
-**One shared shape across stacks** — a single method returning a decision that also carries
-`Retry-After`, so the HTTP layer stays algorithm-agnostic (it never asks "which algorithm?"):
+The algorithm sits behind a one-method interface; the middleware/filter and wiring depend on the
+*interface*, never a concrete type. Adding an algorithm = new type + one factory case, zero edits
+elsewhere. The decision carries `Retry-After` so the HTTP layer stays algorithm-agnostic.
 
 ```go
-// Go — an interface + struct implementations (Go has no classes)
-type Decision struct {
-    Allowed    bool
-    RetryAfter time.Duration // set when !Allowed
-}
-type RateLimiter interface {
-    Allow() Decision
-}
-// LeakyBucket, FixedWindow, TokenBucket, SlidingWindowLog each implement RateLimiter.
+// Go — interface + struct impls
+type Decision struct { Allowed bool; RetryAfter time.Duration }
+type RateLimiter interface { Allow() Decision }
 ```
-
 ```java
-// Java — interface + class implementations
+// Java — interface + class impls
 public record Decision(boolean allowed, Duration retryAfter) {}
 public interface RateLimiter { Decision allow(); }
-// LeakyBucketRateLimiter, FixedWindowRateLimiter, ... implements RateLimiter
 ```
 
-```ts
-// TS (reasoning aid) — same shape
-export interface RateLimiter { allow(): { allowed: boolean; retryAfterMs: number }; }
-```
+**Selection at the composition root** (the only place that knows the concrete type): Go —
+`app.Options` carries the algorithm name + params; a `newRateLimiter(cfg, clock)` factory
+`switch`es and `NewRouter` builds it once. Java — an `@ConfigurationProperties`
+(`app.ratelimit.algorithm`) + a `@Configuration` factory produces the single `RateLimiter` bean.
 
-**Selection is config-driven at the composition root** (the *only* place that knows the concrete
-type):
+### Placement & single-instance
 
-- **Go:** `app.Options` carries an algorithm name + params; a `newRateLimiter(cfg, clock)`
-  factory `switch`es on the name and returns a `RateLimiter`. `NewRouter` builds it once and
-  hands the interface to the middleware. New algorithm → new struct + one `case`.
-- **Java:** an `@ConfigurationProperties` field (`app.ratelimit.algorithm`) + a `@Configuration`
-  that produces the single `RateLimiter` bean via a factory (or `@ConditionalOnProperty` per
-  impl). The filter constructor-injects the `RateLimiter` interface. New algorithm → new class +
-  one factory branch.
+- **Go** (`docs/architecture-go.md`): a `func(http.Handler) http.Handler` middleware added as the
+  **first** `r.Use(...)` inside the `/api` subtree, *before* `RequireAuth`. Built **once** in
+  `NewRouter` and captured in the closure → exactly one instance. Unexported fields; constructor
+  injection (no package global).
+- **Java** (`docs/architecture-java.md`): a **`OncePerRequestFilter`** (guards against async
+  re-dispatch double-counting) registered via **`FilterRegistrationBean`** (dispatch `REQUEST`,
+  scoped to `/api/**`), running before `AuthInterceptor`. A single Spring **singleton bean**;
+  constructor-injected into the filter. Does **not** read `userId` — the limit is global.
 
-**What this buys us live.** We ship **`LeakyBucket`** as the default and keep **`SlidingWindowLog`
-pre-built** as the confirmed second strategy (below). If the interviewer wants strict semantics,
-we enable that class — already unit-tested against the **same interface + same clock harness** —
-and flip one config value; the middleware, filter, and wiring are untouched.
+### Concurrency
 
-### 8.1 The second strategy: `SlidingWindowLog` (strict ≤10 per rolling 60s)
+The entire read-modify-write (clock read → leak/evict → check → mutate) runs in **one** critical
+section — Go `sync.Mutex` (`Lock`/`defer Unlock`), Java one `ReentrantLock`/`synchronized`
+covering *all* access to the state (so no `volatile` needed). No lock-free fast path; no I/O or
+logging inside the lock. The section is O(1) arithmetic, so single-lock contention is negligible.
+_(TS mental model: Node's single-threaded event loop needs no lock — but only while the method
+stays synchronous.)_
 
-The one algorithm that delivers the *literal* reading of "10 requests / minute" — never more
-than 10 in **any** rolling 60s window (unlike leaky/token/fixed-window, which allow ~20 at a
-boundary; see §2 table).
+### Clock injection
 
-- **State:** a queue of the timestamps of the last accepted requests.
-- **On each request** (one atomic critical section, same as §6.2):
-  1. Evict timestamps older than `now - window` (60s) from the front.
-  2. If `count < limit (10)`: accept, append `now`.
-  3. Else: reject 429; `Retry-After = window - (now - oldest timestamp)` (when the oldest entry
-     ages out).
-- **Trade-off vs leaky bucket:** exact guarantee, but **O(n) memory** — up to `limit` timestamps
-  retained (here just 10, so trivial; for a *per-client* variant it's `limit × clients`). No
-  smoothing/burst-shaping — it's a hard count, not a drip.
-- **Same seam:** implements `RateLimiter.Allow()/allow()`, takes the injected clock, constructed
-  by the same factory on `algorithm = "sliding_window_log"`.
+Time is injected so tests are deterministic (no real `sleep`). Go `type Clock func() time.Time`
+(elapsed via `.Sub`, monotonic); Java `java.time.Clock` (`clock.instant()`), with elapsed clamped
+`>= 0` since `Instant` isn't monotonic.
 
-### Red→green additions for the interface
+## 5. Build plan (red → green, one assertion per commit)
 
-- Insert **before §4.1:** define the `RateLimiter` interface + `Decision`; make the middleware
-  depend on the interface. (`LeakyBucket` is the first implementation the §4.1–4.4 tests drive.)
-- Add a later step: **`SlidingWindowLog`** implemented + tested against the *same* interface
-  (allow 10 in a window / reject the 11th / oldest ages out → a slot frees / `Retry-After`
-  correct), plus a **factory-selection test** (`algorithm` config picks the right impl) —
-  proving OCP concretely and giving us the pre-built alternative to demo live.
+One failing-test commit → one make-it-pass commit.
+
+0. **Interface + config shape** — define `RateLimiter`/`Decision`; config `(capacity, period)`
+   deriving `rate` internally, on the existing config seam (Go `app.Options`, Java
+   `@ConfigurationProperties`) so tests/benchmarks can relax the limit. Middleware programs to the
+   interface from here on.
+1. **Allow N / reject N+1** — 10 allowed, 11th rejected.
+2. **Leak frees a slot** — fill, advance the fake clock past one interval, next call allowed
+   (proves leak-then-check).
+3. **Rejects don't consume** — `last` advances on reject; leak resumes on schedule.
+4. **Thread-safety** (Go/Java) — N goroutines/threads never exceed capacity (smoke test for the
+   single-critical-section invariant). _(TS: assert a synchronous 11-call loop = 10 true, 1 false.)_
+5. **HTTP 429 contract** — a **dedicated** router/server with a fresh bucket + injected clock (not
+   the shared `testServer`); assert 11th `/api` request → 429 **and** `Retry-After`; `/health`
+   never 429s. Clock seam: `NewRouterWithClock` (Go) / `@TestConfiguration` overriding the `Clock`
+   bean (Java).
+6. **Sliding-window log** — implement + test against the *same* interface (allow 10 / reject 11th
+   / oldest ages out frees a slot / `Retry-After` correct) + a factory-selection test. Proves OCP.
+7. **Wire into the app** + one end-to-end test on real routes.
+8. **Docs** — short README section: the exact guarantee, tuning knobs, exemptions.
+
+## 6. Appendix — adversarial review (talking points)
+
+Three review agents red-teamed this plan pre-code and caught **real design bugs**, now resolved
+above:
+
+1. **"10/min" overstated** → exact guarantee + comparison table (§3.1).
+2. **Non-atomic read-modify-write** → one locked critical section (§4).
+3. **Stacks diverged around auth** (Go limited after auth, Java before) → unified before-auth
+   placement (§2).
+4. **Java raw `Filter` double-counts** on async dispatch → `OncePerRequestFilter` (§4).
+5. **Shared Go test harness** leaks limiter state / throttles benchmarks → dedicated
+   router+clock for limiter tests, relax via config elsewhere (§5.0/§5.5).
+6. **Wall-clock hazards** → monotonic where possible, clamp `elapsed >= 0`, one signature/unit
+   per stack (§4).
+7. **429 under-specified** → `Retry-After` + error body required; log rejections; ignore `userId`
+   (§2).
+
+### Evolution map (if the interviewer steers)
+
+| Wants… | Change | Blast radius |
+|--------|--------|--------------|
+| Strict rolling-60s cap | flip config to `SlidingWindowLog` | config value |
+| Fixed-window / token bucket | new impl behind the interface | one file |
+| Shaper/queue (delay not reject) | `Allow()` → async `acquire()` that waits | limiter + handler await |
+| Per-client instead of global | key buckets by client id | limiter internals |
+
+Note: rate limiting ≠ concurrency limiting (capping simultaneous slow requests is a
+semaphore/bulkhead, a separate tool).
