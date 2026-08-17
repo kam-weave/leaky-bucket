@@ -52,10 +52,13 @@ and reports how many mutants were **killed** (a test failed, good) vs **survived
 noticed, a real gap). It measures the *strength* of the tests, which is what actually protects the
 code.
 
-**Tool:** [gremlins](https://gremlins.dev), scoped to `go/internal/ratelimit/`.
+**Tool:** [gremlins](https://gremlins.dev), scoped to `go/internal/ratelimit/`. It's tracked as a
+`go tool` dependency in `go.mod`, so no separate install is needed — `go tool gremlins` builds it
+on demand.
 
 ```bash
-make test-mutation
+make test-mutation     # just mutation
+make test-go-all       # every level: unit + integration (race), e2e, then mutation
 ```
 
 **What it found here (a concrete example of the value):** the first run scored **72.5%** efficacy.
