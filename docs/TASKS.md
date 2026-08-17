@@ -183,7 +183,7 @@ followed by one make-it-pass commit. Package: `go/internal/ratelimit`.
   one interval → exactly one slot frees (pins the leak-rate math & units).
 - [x] **T4 — rejects don't consume:** a burst of rejections doesn't push recovery out; `last`
   advances on reject; after waiting, exactly the expected number free up.
-- [ ] **T5 — full recovery / cap:** after a long idle, `level` floors at 0 (not negative) and the
+- [x] **T5 — full recovery / cap:** after a long idle, `level` floors at 0 (not negative) and the
   next burst of 10 is allowed again; level never exceeds capacity.
 - [ ] **T6 — Retry-After:** on reject, `Decision.RetryAfter` ≈ time until one slot frees (~6s),
   and shrinks as the clock advances.
@@ -217,3 +217,4 @@ _Appended as we complete each step._
 | T2 | leak frees one slot per interval | no code change — locks the leak-then-check behavior from T1 |
 | T3 | partial leak is proportional | no code change — pins the leak rate/units |
 | T4 | rejections don't consume capacity | no code change — level only rises on accept |
+| T5 | floor at 0 + full recovery after idle | no code change — `level < 0` clamp from T1 |

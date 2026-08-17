@@ -90,3 +90,23 @@ func TestLeakyBucket_RejectionsDoNotConsume(t *testing.T) {
 		t.Fatal("one interval after a reject flood: want allowed (rejects didn't consume)")
 	}
 }
+
+// T5 — floor at zero, full recovery: after a long idle the level floors at 0 (never
+// negative), so a fresh burst of 10 is allowed again and no more.
+func TestLeakyBucket_FloorsAndFullyRecovers(t *testing.T) {
+	now := time.Now()
+	lb := NewLeakyBucket(10, time.Minute, fixedClock(&now))
+	for i := 0; i < 10; i++ {
+		lb.Allow()
+	}
+
+	now = now.Add(10 * time.Minute) // far longer than needed to drain
+	for i := 1; i <= 10; i++ {
+		if d := lb.Allow(); !d.Allowed {
+			t.Fatalf("post-idle burst %d: want allowed, got rejected", i)
+		}
+	}
+	if d := lb.Allow(); d.Allowed {
+		t.Fatal("post-idle 11th: want rejected (level must not overshoot below 0)")
+	}
+}
